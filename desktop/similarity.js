@@ -38,15 +38,23 @@ export function createRubbishStore(file) {
       writeFileSync(file, JSON.stringify(entries));
       return entries.length;
     },
-    /** Best match at or above THRESHOLD, or null. */
-    match(text) {
+    /** Best match at or above the threshold, or null. */
+    match(text, threshold = THRESHOLD) {
       const q = embed(text);
       let best = null;
       for (const e of entries) {
         const sim = cosine(q, e.vec);
-        if (sim >= THRESHOLD && (!best || sim > best.sim)) best = { sim, text: e.text };
+        if (sim >= threshold && (!best || sim > best.sim)) best = { sim, text: e.text };
       }
       return best;
+    },
+    /** Prune one entry by exact text; true when something was removed. */
+    remove(text) {
+      const i = entries.findIndex((e) => e.text === text);
+      if (i < 0) return false;
+      entries.splice(i, 1);
+      writeFileSync(file, JSON.stringify(entries));
+      return true;
     },
   };
 }
