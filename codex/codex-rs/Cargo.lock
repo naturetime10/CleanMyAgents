@@ -3307,14 +3307,18 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex-http-client",
  "codex-uds",
  "pretty_assertions",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
  "tokio",
  "tracing",
+ "url",
+ "wiremock",
 ]
 
 [[package]]

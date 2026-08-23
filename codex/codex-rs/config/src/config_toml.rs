@@ -535,6 +535,14 @@ pub struct GuardianToml {
     /// Socket the resident guardian process listens on.
     /// Defaults to `$CODEX_HOME/guardian/guardian.sock`.
     pub socket_path: Option<AbsolutePathBuf>,
+    /// Base URL of the REST backend, e.g. `https://guardian.example/api`.
+    /// Required by `mode = "api"` and ignored by every other mode.
+    pub endpoint: Option<String>,
+    /// Name of the environment variable holding the bearer token for
+    /// `endpoint`. The token itself is not a config field on purpose: a
+    /// credential written into `config.toml` outlives the session that needed
+    /// it.
+    pub api_key_env: Option<String>,
     /// Deny guarded actions when the guardian cannot be reached. Defaults to
     /// true: a guard that fails open is not a guard.
     pub fail_closed: Option<bool>,
@@ -555,6 +563,12 @@ pub enum GuardianModeToml {
     Ipc,
     /// Record locally and enforce through the resident process.
     Both,
+    /// Delegate every decision to the HTTP backend named by `endpoint`.
+    ///
+    /// Every guarded action and recorded activity carries prompt text and tool
+    /// output, so this sends session content off the machine. It is never
+    /// selected by default.
+    Api,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

@@ -145,7 +145,7 @@ pub fn configured_session_path(
         GuardianMode::Csv | GuardianMode::Both => {
             Some(session_path(&config.debug_dir(codex_home), thread_id))
         }
-        GuardianMode::Off | GuardianMode::Ipc => None,
+        GuardianMode::Off | GuardianMode::Ipc | GuardianMode::Api => None,
     }
 }
 
