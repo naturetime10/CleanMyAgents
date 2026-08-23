@@ -314,6 +314,7 @@ export function Findings({ s, go }: { s: OpsSnapshot; go: (tab: string, sel: str
 
 /** Route table used by App; keeps tab metadata in one place. */
 export const VIEWS = [
+  { id: "scan", label: "Scan", icon: ICON.scan },
   { id: "overview", label: "Analytics", icon: ICON.analytics },
   { id: "injectors", label: "Hooks", icon: ICON.injectors },
   { id: "mcp", label: "MCP", icon: ICON.mcp },
