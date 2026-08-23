@@ -26,9 +26,18 @@ context-window occupancy.
 
 ```toml
 [guardian]
-# off (default)
-mode = "off"
+# off (default) | csv
+mode = "csv"
+# Per-session CSV history. Default: $CODEX_HOME/guardian/debug
+debug_dir = "/Users/me/.codex/guardian/debug"
 ```
 
 With `mode = "off"` the guard is a no-op: nothing is reviewed and nothing is
 recorded, and the choke points cost one virtual call each.
+
+`csv` writes one CSV file per session, `<debug_dir>/<thread_id>.csv`, with a
+fixed header and one row per guarded action and recorded activity. Rows carry
+the session and turn ids, the tool and call id where there is one, the decision,
+token and context-window counters, and a truncated JSON `detail` column. It
+never denies anything: it is a debugging and audit record, written by a
+background task so the turn path never blocks on disk.
