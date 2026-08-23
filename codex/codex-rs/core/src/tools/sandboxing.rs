@@ -9,6 +9,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
+use codex_guardian::SandboxProfileOverride;
+
 use crate::state::SessionServices;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
@@ -305,17 +307,31 @@ pub(crate) fn managed_network_for_sandbox_permissions(
     }
 }
 
+/// Applies a guard containment override to the sandbox permissions a tool asked
+/// for.
+///
+/// Containment is a separate subsystem from the guard gates: denying a tool call
+/// vetoes it, while tightening permissions confines a call that is allowed to
+/// run. Both overrides refuse escalation out of the sandbox; the tool either
+/// runs contained or does not run.
+pub(crate) fn contain_sandbox_permissions(
+    requested: SandboxPermissions,
+    containment: Option<SandboxProfileOverride>,
+) -> SandboxPermissions {
+    match containment {
+        Some(SandboxProfileOverride::ReadOnly | SandboxProfileOverride::RequireSandbox) => {
+            SandboxPermissions::UseDefault
+        }
+        None => requested,
+    }
+}
+
 pub(crate) trait Approvable<Req> {
     /// Return per-request sandbox permissions for first-attempt sandbox
     /// selection. Most tools use the ambient sandbox policy unchanged.
-    // TODO(codex-monitor): CONTAINMENT coordination point (OS sandbox is a separate
-    // subsystem from the hook taps). Path-scoping (writable roots + read-only
-    // carve-outs), per-task profiles (restricted surface for cleanup threads vs.
-    // full shell for coding threads), and "refuse to run rather than run unsandboxed"
-    // are enforced here by tightening SandboxPermissions per request/agent_type.
-    // The monitor can supply/override the profile here; PreToolUse denial only vetoes,
-    // it does not confine. Quarantine (move-not-delete) is best done by rewriting the
-    // action at the PreToolUse tap + monitor-side mv+manifest.
+    ///
+    /// The value is not final: [`contain_sandbox_permissions`] gives the guard a
+    /// say before the sandbox is selected.
     fn sandbox_permissions(&self, _req: &Req) -> SandboxPermissions {
         SandboxPermissions::UseDefault
     }

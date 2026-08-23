@@ -1,17 +1,18 @@
-// TODO(codex-monitor): This module is the HOOK LAYER. The monitor "guard" is NOT a
-// hook and does NOT live here — it is a superior reference-monitor layer that runs
-// ABOVE hooks at each dispatch choke point (GUARD GATE markers in tools/registry.rs,
-// tools/approvals.rs, session/turn.rs). The guard decides first; the hooks below only
-// ever see actions the guard has already admitted, so no hook can override the guard
-// and the guard is independent of hook config/trust/enable. Decision precedence at a
-// choke point is: Guard -> Hooks -> Guardian -> user.
-//
-// This module contributes only the SECONDARY, hook-based path:
-//   1. Firehose recording tap: inside `emit_hook_completed_events`, forward every
-//      completed run to the monitor for the append-only audit log + upload.
-//   2. Optional fallback enforcement via configured hooks (weaker than the guard;
-//      subject to hook config). Prefer the GUARD GATEs for enforcement.
-// See plan: ~/.claude/plans/focus-on-planning-frolicking-origami.md
+//! Hook layer.
+//!
+//! The guard (`codex_guardian::Guardian`) is not a hook and does not live here:
+//! it runs above this layer at each dispatch choke point (`tools/registry.rs`,
+//! `tools/approvals.rs`, `session/turn.rs`), so the hooks below only ever see
+//! actions the guard has already admitted. Decision precedence at a choke point
+//! is Guard -> Hooks -> Guardian review -> user.
+//!
+//! What this module contributes to the guard layer is recording: lifecycle,
+//! compaction, and the firehose of completed hook runs.
+use codex_guardian::Activity;
+use codex_guardian::CompactionPhase;
+
+use crate::session::guardian_tap;
+
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -192,9 +193,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_name: &HookToolName,
     tool_input: &Value,
 ) -> PreToolUseHookResult {
-    // TODO(codex-monitor): HOOK LAYER (below the guard). Primary tool/MCP enforcement
-    // belongs at the GUARD GATE in tools/registry.rs (runs before this fn). Only use
-    // this hook-based path as a secondary/fallback, since it is subject to hook config.
+    // Hook layer, below the guard: tool/MCP enforcement is decided first at the
+    // guard gate in tools/registry.rs, which runs before this fn.
     let request = PreToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -256,9 +256,8 @@ pub(crate) async fn run_permission_request_hooks(
     run_id_suffix: &str,
     payload: PermissionRequestPayload,
 ) -> Option<PermissionRequestDecision> {
-    // TODO(codex-monitor): HOOK LAYER (below the guard). The guard already had first
-    // say at the GUARD GATE in tools/approvals.rs. This hook-based approval path is
-    // secondary; precedence is Guard -> Hooks -> Guardian -> user.
+    // Hook layer, below the guard: the guard already had first say at the guard
+    // gate in tools/approvals.rs. Precedence is Guard -> Hooks -> Guardian -> user.
     let request = PermissionRequestRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -301,8 +300,6 @@ pub(crate) async fn run_post_tool_use_hooks(
     tool_input: Value,
     tool_response: Value,
 ) -> PostToolUseOutcome {
-    // TODO(codex-monitor): POST-EXEC RECORDING TAP. Forward `tool_input` +
-    // `tool_response` to the monitor for the audit log (result of the action).
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -334,9 +331,16 @@ pub(crate) async fn run_turn_stop_hooks(
     stop_hook_active: bool,
     last_assistant_message: Option<String>,
 ) -> StopOutcome {
-    // TODO(codex-monitor): LIFECYCLE TAP (turn/agent stop). Record turn completion
-    // (incl. last_assistant_message) to the monitor audit log.
     let turn_context = &step_context.turn;
+    // LIFECYCLE TAP: the turn finished, with the assistant's closing message.
+    guardian_tap::record(
+        sess,
+        turn_context,
+        Activity::TurnStopped {
+            last_assistant_message: last_assistant_message.clone(),
+        },
+    )
+    .await;
     // Resolve the stop hook kind from the session source before building the
     // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
     let (target, transcript_path) = match &turn_context.session_source {
@@ -421,8 +425,11 @@ pub(crate) async fn run_turn_stop_hooks(
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
-    // TODO(codex-monitor): LIFECYCLE TAP (session end). Notify the monitor so it can
-    // flush/close this session's audit records and finalize any pending upload batch.
+    // LIFECYCLE TAP: record the end of the session and flush pending records
+    // before the session's services go away.
+    guardian_tap::record_session(sess, Activity::SessionEnded).await;
+    sess.services.guardian.flush().await;
+
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_session_end();
     if preview_runs.is_empty() {
@@ -458,14 +465,18 @@ pub(crate) async fn run_pre_compact_hooks(
     turn_context: &Arc<TurnContext>,
     trigger: CompactionTrigger,
 ) -> PreCompactHookOutcome {
-    // TODO(codex-monitor): COMPACTION TAP (pre). All 4 compaction variants
-    // (compact.rs, compact_token_budget.rs, compact_remote{,_v2}.rs) funnel through
-    // here. Record the impending compaction (trigger = manual/auto) and, ideally, the
-    // context ABOUT to be dropped/summarized, so the audit narrative and
-    // "garbage detection / waste in context" have the before-state. This is also a
-    // control point: returning PreCompactHookOutcome::Stopped vetoes compaction (e.g.
-    // to snapshot first). For a true above-hook guard, gate before this call at the
-    // compact.rs call sites.
+    // COMPACTION TAP (pre): all compaction variants funnel through here, so this
+    // is where the audit narrative gets the before-state of a context reset.
+    guardian_tap::record(
+        sess,
+        turn_context,
+        Activity::Compacted {
+            phase: CompactionPhase::Pre,
+            trigger: format!("{trigger:?}"),
+        },
+    )
+    .await;
+
     let request = codex_hooks::PreCompactRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -503,10 +514,18 @@ pub(crate) async fn run_post_compact_hooks(
     turn_context: &Arc<TurnContext>,
     trigger: CompactionTrigger,
 ) -> PostCompactHookOutcome {
-    // TODO(codex-monitor): COMPACTION TAP (post). Record the result of compaction
-    // (what context remained after summarization) so the monitor can pair it with the
-    // pre-compact before-state for waste/garbage analysis and keep the audit record
-    // continuous across the context reset.
+    // COMPACTION TAP (post): pairs with the pre-compact record so the audit shows
+    // what survived the reset.
+    guardian_tap::record(
+        sess,
+        turn_context,
+        Activity::Compacted {
+            phase: CompactionPhase::Post,
+            trigger: format!("{trigger:?}"),
+        },
+    )
+    .await;
+
     let request = codex_hooks::PostCompactRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -604,9 +623,8 @@ pub(crate) async fn inspect_pending_input(
 ) -> HookRuntimeOutcome {
     match pending_input_item {
         TurnInput::UserInput { content, .. } => {
-            // TODO(codex-monitor): HOOK LAYER (below the guard). Primary prompt
-            // enforcement belongs at the GUARD GATE in session/turn.rs (runs before
-            // this fn). This hook-based path is secondary/config-subject.
+            // Hook layer, below the guard: prompt intake is decided first at the
+            // guard gate in session/turn.rs, which runs before this fn.
             let request = UserPromptSubmitRequest {
                 session_id: sess.session_id().into(),
                 turn_id: turn_context.sub_id.clone(),
@@ -648,12 +666,9 @@ pub(crate) async fn record_pending_input(
 ) {
     match pending_input {
         TurnInput::UserInput { content, client_id } => {
-            // TODO(codex-monitor): PROMPT-REWRITE TAP. `content` is the final prompt
-            // about to be recorded into history and sent to the model. The
-            // UserPromptSubmit hook can only block or *append* additionalContext; to
-            // actually reshape/replace the prompt text (e.g. inject constraints inline
-            // or redact), rewrite `content` here from the monitor's verdict before
-            // record_user_prompt_and_emit_turn_item.
+            // `content` is the final prompt entering history. A UserPromptSubmit
+            // hook can only block or append context, so the text itself is
+            // reshaped earlier, at the guard gate in session/turn.rs.
             sess.record_user_prompt_and_emit_turn_item(
                 turn_context.as_ref(),
                 content.as_slice(),
@@ -813,14 +828,24 @@ pub(crate) async fn emit_hook_completed_events(
     }
 
     for completed in completed_events {
-        // TODO(codex-monitor): FIREHOSE RECORDING TAP. Every completed hook run
-        // (sync + async, all event types) passes through here. Forward `completed`
-        // to the monitor daemon for the append-only audit log + batched upload.
-        // This is a log-only tap (never blocks); enforcement lives in the pre-action
-        // fns above.
-        // IDENTITY enrichment: the hook payloads carry session_id/turn_id/thread_id
-        // (correlation), but not the authenticated account. Attach identity here from
-        // `sess` (auth/account) + originator so every recorded event says who ran it.
+        // FIREHOSE RECORDING TAP: every completed hook run, sync and async, for
+        // every event type, passes through here. Log-only — enforcement lives at
+        // the guard gates. The context the tap builds carries the authenticated
+        // account, which hook payloads themselves never say.
+        guardian_tap::record(
+            sess,
+            turn_context,
+            Activity::HookCompleted {
+                hook_event: format!("{:?}", completed.run.event_name),
+                handler: format!("{:?}", completed.run.handler_type),
+                status: format!("{:?}", completed.run.status),
+                duration_ms: completed
+                    .run
+                    .duration_ms
+                    .and_then(|ms| u64::try_from(ms).ok()),
+            },
+        )
+        .await;
         emit_hook_completed_metrics(turn_context, &completed);
         track_hook_completed_analytics(sess, turn_context, &completed);
         if completed.run.execution_mode == HookExecutionMode::Sync {

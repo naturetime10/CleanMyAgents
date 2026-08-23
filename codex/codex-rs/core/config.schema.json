@@ -1380,6 +1380,33 @@
       ],
       "type": "object"
     },
+    "GuardianModeToml": {
+      "description": "Guardian implementation selected by `[guardian] mode`.",
+      "oneOf": [
+        {
+          "description": "No guarding and no recording.",
+          "enum": [
+            "off"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "GuardianToml": {
+      "additionalProperties": false,
+      "description": "Guard-layer settings, read from the `[guardian]` table.",
+      "properties": {
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/GuardianModeToml"
+            }
+          ],
+          "description": "Which guardian implementation to run. Defaults to `off`."
+        }
+      },
+      "type": "object"
+    },
     "GuardianV2ConfigToml": {
       "additionalProperties": false,
       "description": "User-configurable prompt, approval, and context settings for Guardian v2.",
@@ -5993,6 +6020,14 @@
         }
       ],
       "description": "Goal-related settings."
+    },
+    "guardian": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/GuardianToml"
+        }
+      ],
+      "description": "Inline reference monitor (\"guard layer\") that reviews and records session activity above the hook layer."
     },
     "hide_agent_reasoning": {
       "default": false,

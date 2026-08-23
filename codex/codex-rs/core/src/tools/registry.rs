@@ -4,6 +4,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_guardian::Activity;
+use codex_guardian::GuardedAction;
+use codex_guardian::Verdict;
+
 use crate::function_tool::FunctionCallError;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
@@ -13,6 +17,7 @@ use crate::memory_usage::emit_metric_for_tool_read;
 use crate::memory_usage::shell_script_for_invocation;
 use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
+use crate::session::guardian_tap;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
@@ -563,66 +568,55 @@ impl ToolRegistry {
             return Err(err);
         }
 
-        // TODO(codex-monitor): GUARD GATE (above the hook layer) for ALL tool/MCP
-        // calls. The guard is NOT a hook — call the monitor HERE, before
-        // `run_pre_tool_use_hooks` below, so its verdict is independent of hook config
-        // and cannot be overridden by any hook. Deny -> return
-        // FunctionCallError::RespondToModel (FAIL-CLOSED when unreachable); Rewrite ->
-        // update `invocation`; Allow -> fall through. Hooks then run only on what the
-        // guard admits. Precedence: Guard -> Hooks -> exec.
+        // GUARD GATE (above the hook layer) for ALL tool and MCP calls. The guard is
+        // not a hook: it decides first, independently of hook config, so no hook can
+        // override it. Hooks below then run only on what the guard admits.
+        // Precedence: Guard -> Hooks -> exec.
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
-            // Hook layer (below the guard): configured PreToolUse hooks.
-            match run_pre_tool_use_hooks(
+            let verdict = guardian_tap::review(
+                &invocation.session,
+                &invocation.turn,
+                GuardedAction::ToolCall {
+                    tool_name: pre_tool_use_payload.tool_name.name().to_string(),
+                    matcher_aliases: pre_tool_use_payload.tool_name.matcher_aliases().to_vec(),
+                    call_id: invocation.call_id.clone(),
+                    tool_input: pre_tool_use_payload.tool_input.clone(),
+                },
+            )
+            .await;
+            if let Some(decision) =
+                guard_pre_dispatch_decision(verdict, &pre_tool_use_payload.tool_name)
+            {
+                apply_pre_dispatch_decision(
+                    &tool,
+                    &mut invocation,
+                    &dispatch_trace,
+                    terminal_outcome_reached.as_deref(),
+                    decision,
+                )
+                .await?;
+            }
+        }
+
+        // Hook layer (below the guard): configured PreToolUse hooks. The payload is
+        // rebuilt so hooks see any rewrite the guard applied.
+        if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
+            let decision = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
             )
-            .await
-            {
-                PreToolUseHookResult::Blocked(message) => {
-                    if tool.is_builtin_control_tool() {
-                        let mut analytics = ControlToolCallGuard::new(&invocation);
-                        analytics.finish(ControlToolCallStatus::Rejected);
-                    }
-                    let err = FunctionCallError::RespondToModel(message);
-                    dispatch_trace.record_failed(&err);
-                    notify_tool_finish_if_unclaimed(
-                        &invocation,
-                        terminal_outcome_reached.as_deref(),
-                        ToolCallOutcome::Blocked,
-                    )
-                    .await;
-                    return Err(err);
-                }
-                PreToolUseHookResult::Continue {
-                    updated_input: Some(updated_input),
-                } => match tool.with_updated_hook_input(invocation.clone(), updated_input) {
-                    Ok(updated_invocation) => {
-                        invocation = updated_invocation;
-                    }
-                    Err(err) => {
-                        if tool.is_builtin_control_tool() {
-                            let mut analytics = ControlToolCallGuard::new(&invocation);
-                            analytics.finish(ControlToolCallStatus::Failed);
-                        }
-                        dispatch_trace.record_failed(&err);
-                        notify_tool_finish_if_unclaimed(
-                            &invocation,
-                            terminal_outcome_reached.as_deref(),
-                            ToolCallOutcome::Failed {
-                                handler_executed: false,
-                            },
-                        )
-                        .await;
-                        return Err(err);
-                    }
-                },
-                PreToolUseHookResult::Continue {
-                    updated_input: None,
-                } => {}
-            }
+            .await;
+            apply_pre_dispatch_decision(
+                &tool,
+                &mut invocation,
+                &dispatch_trace,
+                terminal_outcome_reached.as_deref(),
+                decision,
+            )
+            .await?;
         }
 
         notify_tool_start(&invocation).await;
@@ -664,12 +658,6 @@ impl ToolRegistry {
                 },
             )
             .await;
-        // TODO(codex-monitor): OUTPUT-REWRITE TAP. `result` here is the tool/MCP
-        // output before it becomes the model-visible response item. This is the ONLY
-        // place to strip ads/prompt-injections/secrets from tool results — the
-        // `PostToolUse` hook can record/block but cannot rewrite output
-        // (`updatedMCPToolOutput` is rejected in output_parser.rs). Send `result` to
-        // the monitor and substitute a sanitized version before it flows to the model.
         let success = match &result {
             Ok(result) => result.result.success_for_logging(),
             Err(_) => false,
@@ -690,10 +678,47 @@ impl ToolRegistry {
         } else {
             None
         };
+
+        // OUTPUT-REWRITE TAP. `result` is the tool/MCP output before it becomes the
+        // model-visible response item, and this is the only place it can be rewritten:
+        // a PostToolUse hook can record or block a result but cannot replace it
+        // (`updatedMCPToolOutput` is rejected in output_parser.rs). The verdict is
+        // applied where the post-tool-use feedback is applied, below.
+        let guard_output_decision = match &post_tool_use_payload {
+            Some(payload) => {
+                let verdict = guardian_tap::review(
+                    &invocation.session,
+                    &invocation.turn,
+                    GuardedAction::ToolOutput {
+                        tool_name: payload.tool_name.name().to_string(),
+                        call_id: call_id_owned.clone(),
+                        tool_input: payload.tool_input.clone(),
+                        tool_response: payload.tool_response.clone(),
+                    },
+                )
+                .await;
+                guard_output_decision(verdict)
+            }
+            None => GuardOutputDecision::Keep,
+        };
+
+        // POST-EXEC RECORDING TAP: the result of the action, for the audit narrative.
+        guardian_tap::record(
+            &invocation.session,
+            &invocation.turn,
+            Activity::ToolCallCompleted {
+                tool_name: tool_name.to_string(),
+                call_id: call_id_owned.clone(),
+                success,
+                tool_response: post_tool_use_payload
+                    .as_ref()
+                    .map(|payload| payload.tool_response.clone())
+                    .unwrap_or(serde_json::Value::Null),
+            },
+        )
+        .await;
         let post_tool_use_outcome = if let Some(post_tool_use_payload) = post_tool_use_payload {
             Some(
-                // TODO(codex-monitor): post-exec recording point; monitor tap lives in
-                // `hook_runtime::run_post_tool_use_hooks`.
                 run_post_tool_use_hooks(
                     &invocation.session,
                     &invocation.turn,
@@ -733,6 +758,22 @@ impl ToolRegistry {
 
         match result {
             Ok(mut result) => {
+                match guard_output_decision {
+                    GuardOutputDecision::Keep => {}
+                    GuardOutputDecision::Reject(reason) => {
+                        let err = FunctionCallError::RespondToModel(reason);
+                        dispatch_trace.record_failed(&err);
+                        return Err(err);
+                    }
+                    GuardOutputDecision::Replace(sanitized) => {
+                        result.result = Box::new(PostToolUseFeedbackOutput {
+                            original: result.result,
+                            model_visible: FunctionToolOutput::from_text(
+                                sanitized, /*success*/ None,
+                            ),
+                        });
+                    }
+                }
                 if let Some(outcome) = post_tool_use_outcome {
                     if outcome.should_block {
                         let message = outcome.feedback_message.unwrap_or_else(|| {
@@ -766,6 +807,107 @@ impl ToolRegistry {
                 Err(err)
             }
         }
+    }
+}
+
+/// What the guard decided about a completed tool result.
+enum GuardOutputDecision {
+    /// Let the result through unchanged.
+    Keep,
+    /// Substitute this text for the model-visible result.
+    Replace(String),
+    /// Reject the result with this reason. The tool already ran; only its
+    /// result is withheld from the model.
+    Reject(String),
+}
+
+/// Maps an output verdict onto the action taken once the result is in hand.
+fn guard_output_decision(verdict: Verdict) -> GuardOutputDecision {
+    match verdict {
+        Verdict::Rewrite { payload, .. } => GuardOutputDecision::Replace(match payload {
+            Value::String(text) => text,
+            other => other.to_string(),
+        }),
+        Verdict::Deny { reason } => {
+            GuardOutputDecision::Reject(format!("Tool result blocked by the guardian: {reason}"))
+        }
+        Verdict::Allow | Verdict::Defer => GuardOutputDecision::Keep,
+    }
+}
+
+/// Maps a pre-dispatch verdict onto the same decision shape the hook layer
+/// produces, so guard and hooks share one application path.
+fn guard_pre_dispatch_decision(
+    verdict: Verdict,
+    tool_name: &HookToolName,
+) -> Option<PreToolUseHookResult> {
+    match verdict {
+        Verdict::Deny { reason } => Some(PreToolUseHookResult::Blocked(format!(
+            "Tool call blocked by the guardian: {reason}. Tool: {}",
+            tool_name.name()
+        ))),
+        Verdict::Rewrite { payload, .. } => Some(PreToolUseHookResult::Continue {
+            updated_input: Some(payload),
+        }),
+        Verdict::Allow | Verdict::Defer => None,
+    }
+}
+
+/// Applies one pre-dispatch decision — from the guard or from the hook layer —
+/// to the pending invocation.
+///
+/// `Ok(())` means dispatch may continue; `Err` is the terminal error to return
+/// from dispatch.
+async fn apply_pre_dispatch_decision(
+    tool: &Arc<dyn CoreToolRuntime>,
+    invocation: &mut ToolInvocation,
+    dispatch_trace: &ToolDispatchTrace,
+    terminal_outcome_reached: Option<&AtomicBool>,
+    decision: PreToolUseHookResult,
+) -> Result<(), FunctionCallError> {
+    match decision {
+        PreToolUseHookResult::Blocked(message) => {
+            if tool.is_builtin_control_tool() {
+                let mut analytics = ControlToolCallGuard::new(invocation);
+                analytics.finish(ControlToolCallStatus::Rejected);
+            }
+            let err = FunctionCallError::RespondToModel(message);
+            dispatch_trace.record_failed(&err);
+            notify_tool_finish_if_unclaimed(
+                invocation,
+                terminal_outcome_reached,
+                ToolCallOutcome::Blocked,
+            )
+            .await;
+            Err(err)
+        }
+        PreToolUseHookResult::Continue {
+            updated_input: Some(updated_input),
+        } => match tool.with_updated_hook_input(invocation.clone(), updated_input) {
+            Ok(updated_invocation) => {
+                *invocation = updated_invocation;
+                Ok(())
+            }
+            Err(err) => {
+                if tool.is_builtin_control_tool() {
+                    let mut analytics = ControlToolCallGuard::new(invocation);
+                    analytics.finish(ControlToolCallStatus::Failed);
+                }
+                dispatch_trace.record_failed(&err);
+                notify_tool_finish_if_unclaimed(
+                    invocation,
+                    terminal_outcome_reached,
+                    ToolCallOutcome::Failed {
+                        handler_executed: false,
+                    },
+                )
+                .await;
+                Err(err)
+            }
+        },
+        PreToolUseHookResult::Continue {
+            updated_input: None,
+        } => Ok(()),
     }
 }
 
@@ -837,3 +979,7 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) ->
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "registry_guard_tests.rs"]
+mod guard_tests;

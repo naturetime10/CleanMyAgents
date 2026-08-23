@@ -2768,6 +2768,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-system",
  "codex-git-utils",
+ "codex-guardian",
  "codex-history",
  "codex-home",
  "codex-hooks",
@@ -3296,6 +3297,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "codex-guardian"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

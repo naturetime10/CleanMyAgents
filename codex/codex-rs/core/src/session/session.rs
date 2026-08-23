@@ -8,6 +8,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::session::guardian_tap::GuardianIdentity;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -1371,6 +1372,21 @@ impl Session {
                 .features
                 .enabled(Feature::ExecutedToolCallMetadata)
                 .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
+
+            // The guard layer is chosen from config, exactly like the thread
+            // store: core depends on the trait only, so a deployment can record
+            // to local CSV history, delegate to a resident process over IPC,
+            // both, or nothing at all.
+            let guardian = codex_guardian::guardian_from_config(
+                &config.guardian,
+                config.codex_home.as_path(),
+            );
+            let guardian_identity = GuardianIdentity {
+                originator: session_configuration.originator.clone(),
+                account: auth_manager.auth_cached().and_then(|auth| {
+                    auth.get_account_email().or_else(|| auth.get_account_id())
+                }),
+            };
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.
@@ -1420,6 +1436,8 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
                 time_provider,
+                guardian,
+                guardian_identity,
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     if config.features.enabled(Feature::UseAgentIdentity) {
@@ -1482,6 +1500,14 @@ impl Session {
                 fork_persistence,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            // LIFECYCLE TAP: the session exists; everything it does from here is
+            // recorded against this thread id.
+            crate::session::guardian_tap::record_session(
+                sess.as_ref(),
+                codex_guardian::Activity::SessionStarted,
+            )
+            .await;
+
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
