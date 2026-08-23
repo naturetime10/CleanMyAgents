@@ -1389,6 +1389,13 @@
             "off"
           ],
           "type": "string"
+        },
+        {
+          "description": "Append every session activity to a per-session CSV file.",
+          "enum": [
+            "csv"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1396,6 +1403,14 @@
       "additionalProperties": false,
       "description": "Guard-layer settings, read from the `[guardian]` table.",
       "properties": {
+        "debug_dir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Directory holding the per-session CSV history. Defaults to `$CODEX_HOME/guardian/debug`."
+        },
         "mode": {
           "allOf": [
             {
