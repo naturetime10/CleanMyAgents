@@ -4,6 +4,9 @@
    column, detail pane clamp(320px, 36%, 420px). */
 
 .tj {
+  /* The pick bar is absolute against this. Without it the bar would anchor to
+     the page and drift off as the ledger scrolls. */
+  position: relative;
   --k-system: #6b7280;
   --k-user: #2a78d6;
   --k-context: #1baf7a;
@@ -92,6 +95,19 @@
 .tj-blk[data-status="failed"], .tj-blk[data-status="blocked"] { background: var(--danger); }
 .tj-blk[data-current="true"] { opacity: 1; outline: 2px solid var(--ink); outline-offset: 1px; z-index: 2; }
 
+/* Full height of the strip, flat, and exactly over the step it marks —
+   geometry comes from the component so the band and the block agree. */
+.tj-band {
+  position: absolute; top: 0; bottom: 0; z-index: 0;
+  left: var(--x); width: var(--w);
+  background: rgba(237, 161, 0, 0.26);
+}
+.tj-band[data-note="critical"] { background: rgba(227, 73, 72, 0.26); }
+.tj-band[data-blocked] { background: rgba(22, 24, 29, 0.1); }
+
+/* The block keeps its own colour; the band behind it does the shouting. */
+.tj-blk[data-blocked] { filter: grayscale(1); opacity: 0.5; }
+
 /* ── split ── */
 .tj-split { flex: 1; display: flex; min-height: 0; overflow: hidden; }
 .tj-ledger { flex: 1; min-width: 0; overflow-y: auto; }
@@ -105,6 +121,9 @@
 .tj-table { width: 100%; border-spacing: 0; table-layout: fixed; }
 .tj-col-event { width: 122px; }
 .tj-col-tokens { width: 62px; }
+/* Shift-click is a range gesture here, and the browser reads it as "select
+   text". Turning that off is what stops the ledger filling with blue. */
+.tj-table { user-select: none; }
 .tj-table tr { cursor: pointer; }
 .tj-table tr:hover td { background: #fafaf9; }
 .tj-table tr[data-selected="true"] td { background: #eef3fb; }
@@ -212,3 +231,94 @@
 .tj-rollup td.n { font-variant-numeric: tabular-nums; }
 .tj-rollup td.hot { color: #b8501f; }
 .tj-note { margin-top: 14px; font-size: 12.5px; line-height: 1.6; color: var(--ink3); }
+
+/* ── agent annotations ── */
+
+/* A marked row is filled, the way a highlighter fills a line. A dot in the
+   margin was accurate and invisible: the eye scans the ledger, not the margin. */
+.tj-table tr[data-note] td { background: #fdf6e3; }
+.tj-table tr[data-note="critical"] td { background: #fdeeeb; }
+.tj-table tr[data-note] .tj-event { box-shadow: inset 3px 0 0 #eda100; }
+.tj-table tr[data-note="critical"] .tj-event { box-shadow: inset 3px 0 0 var(--crit); }
+.tj-table tr[data-note]:hover td { background: #fbf0d4; }
+.tj-table tr[data-note="critical"]:hover td { background: #fce3de; }
+/* Blocked rows are settled: the highlight steps back to grey and the text dims. */
+.tj-table tr[data-blocked] td { background: #f2f2f0; color: var(--ink3); }
+.tj-table tr[data-blocked] .tj-event { box-shadow: inset 3px 0 0 var(--ink3); }
+.tj-table tr[data-blocked] .tj-text, .tj-table tr[data-blocked] .tj-name { text-decoration: line-through; }
+
+/* Flat: the row fill already carries the colour, so the tag is a word, not a
+   chip on top of a chip. */
+.tj-note {
+  flex: none; margin-left: 10px; padding: 0;
+  font: 600 9.5px var(--sans); line-height: 16px;
+  text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap;
+}
+.tj-note[data-kind="waste"] { color: #a07615; }
+.tj-note[data-kind="security"] { color: #c2453f; }
+.tj-note[data-blocked] { color: var(--ink3); }
+
+/* Fixed, not absolute: the ledger scrolls and would clip the card. */
+.tj-card {
+  position: fixed; z-index: 20; width: 380px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  padding: 14px 15px;
+  animation: tj-pop 0.14s ease-out;
+}
+@keyframes tj-pop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.tj-card-note + .tj-card-note { margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--line-soft); }
+.tj-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tj-card-kind {
+  font: 500 9.5px var(--sans); text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 2px 7px; border-radius: 20px;
+}
+.tj-card-note[data-kind="waste"] .tj-card-kind { background: #fcf3e0; color: #8a6300; }
+.tj-card-note[data-kind="security"] .tj-card-kind { background: #fdeceb; color: #b4322f; }
+.tj-card-agent { font: 11px var(--mono); color: var(--ink3); }
+.tj-card-tok {
+  margin-left: auto; font: 11.5px var(--mono); color: #b8501f;
+  font-variant-numeric: tabular-nums;
+}
+.tj-card b { display: block; font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; }
+.tj-card p { margin: 6px 0 0; font-size: 12.5px; color: var(--ink2); line-height: 1.55; }
+.tj-card code {
+  display: block; margin-top: 8px; padding: 7px 9px;
+  background: #fbfbfa; border: 1px solid var(--line); border-radius: 6px;
+  font: 11px/1.5 var(--mono); color: var(--ink2); word-break: break-word;
+}
+.tj-card-block {
+  width: 100%; margin-top: 13px; padding: 8px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--card);
+  font: 500 12.5px var(--sans); color: var(--ink); cursor: pointer;
+}
+.tj-card-block:hover { background: #fafaf9; }
+.tj-card-block[data-on] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.tj-card-nope { color: var(--ink3) !important; font-size: 12px !important; margin-top: 12px !important; }
+
+/* ── picking a range to mark by hand ── */
+.tj-table tr[data-picked] td { background: #eef3fb; }
+.tj-table tr[data-picked] .tj-event { box-shadow: inset 3px 0 0 var(--k-user); }
+
+.tj-pick {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: 54px; z-index: 15;
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px 9px 15px;
+  background: rgba(22, 24, 29, 0.94); backdrop-filter: blur(10px);
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+.tj-pick span { font-size: 12.5px; color: #fff; margin-right: 4px; font-variant-numeric: tabular-nums; }
+.tj-pick button {
+  border: 0; border-radius: 6px; padding: 5px 11px; cursor: pointer;
+  font: 500 12.5px var(--sans); background: rgba(255, 255, 255, 0.14); color: #fff;
+}
+.tj-pick button:hover { background: rgba(255, 255, 255, 0.24); }
+.tj-pick .tj-pick-x { background: none; color: rgba(255, 255, 255, 0.55); }
+.tj-pick .tj-pick-x:hover { color: #fff; }
+
+/* A mark you made yourself is attributed differently from an agent's. */
+.tj-card-agent[data-you] { color: var(--k-user); font-weight: 600; }
