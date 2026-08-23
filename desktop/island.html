@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-select: none; cursor: default; }
+  body { background: transparent; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+         display: flex; justify-content: center; }
+  .island {
+    width: 440px; margin-top: 0;
+    background: #000;
+    border-radius: 0 0 24px 24px;
+    padding: 40px 20px 16px;   /* top padding hides behind the notch */
+    color: #fff;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5);
+    transform: translateY(-100%);
+    animation: drop .35s cubic-bezier(.32,.72,.35,1.1) forwards;
+  }
+  @keyframes drop { to { transform: translateY(0); } }
+  .head { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #ffc84a; flex: none;
+         animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .tool { font-family: ui-monospace, monospace; font-size: 12px; color: #9fe8ff; }
+  .why { color: #b9b3c6; font-size: 12px; margin: 8px 0 4px; }
+  .why b { color: #ffc84a; font-weight: 600; }
+  .snippet { font-family: ui-monospace, monospace; font-size: 11px; color: #d8d3e3;
+             background: rgba(255,255,255,.08); border-radius: 8px; padding: 8px 10px;
+             max-height: 60px; overflow: hidden; word-break: break-all; margin-bottom: 12px; }
+  .btns { display: flex; gap: 10px; }
+  .col { flex: 1; }
+  .btn { text-align: center; padding: 9px 0; border-radius: 10px; font-weight: 650;
+         font-size: 13.5px; cursor: pointer; }
+  .sub { text-align: center; padding: 6px 0 0; font-size: 11.5px; color: #8b84a0; cursor: pointer; }
+  .sub:active { color: #fff; }
+  .allow { background: #2ecc5e; color: #04220d; }
+  .deny { background: rgba(255,255,255,.12); }
+  .btn:active { filter: brightness(1.25); }
+  .count { color: #6f6980; font-size: 11px; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <div class="island">
+    <div class="head"><span class="dot"></span>Tool call flagged <span class="tool" id="tool"></span></div>
+    <div class="why">Matched <b id="hits"></b></div>
+    <div class="snippet" id="snippet"></div>
+    <div class="btns">
+      <div class="col">
+        <div class="btn deny" onclick="decide(false)">Deny once</div>
+        <div class="sub" onclick="decide(false, true)">Always deny</div>
+      </div>
+      <div class="col">
+        <div class="btn allow" onclick="decide(true)">Allow once</div>
+        <div class="sub" onclick="decide(true, true)">Always allow</div>
+      </div>
+    </div>
+    <div class="count" id="count"></div>
+  </div>
+<script>
+let id = null, left = 30, timer = null;
+
+function show(req) {
+  id = req.id; left = 30;
+  document.getElementById("tool").textContent = req.tool ?? "unknown";
+  document.getElementById("hits").textContent = (req.hits ?? []).join(", ");
+  document.getElementById("snippet").textContent = (req.text ?? "").slice(0, 300);
+  clearInterval(timer);
+  timer = setInterval(() => {
+    document.getElementById("count").textContent = `auto-deny in ${--left}s`;
+    if (left <= 0) decide(false);
+  }, 1000);
+}
+
+function decide(allow, always = false) {
+  clearInterval(timer);
+  if (id) fetch("/decision", { method: "POST", body: JSON.stringify({ id, allow, always }) });
+  id = null;
+}
+</script>
+</body>
+</html>
