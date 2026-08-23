@@ -109,27 +109,58 @@ export function mockSession(): Session {
     rec("assistant",
         "I'll walk the rollout history and attribute every developer block to the plugin that produced it.",
         2, 4, { tokens: 74, durationMs: 1180, hierarchy: "Turn 2" }),
+    /*
+     * Blocked calls. Reason strings mirror the layers that exist in the codex
+     * fork, in their precedence order (Guard -> Hooks -> review -> user):
+     * a preToolUse hook block, a guardian pre-call deny ("Tool call blocked by
+     * the guardian: {reason}. Tool: {name}"), a guardian output deny ("Tool
+     * result blocked by the guardian: {reason}"), and a fail-closed refusal
+     * when the monitor is unreachable ("codex-guardian unavailable
+     * (fail-closed): ...").
+     *
+     * savedTokens: calls to this session's bash have a median completed result
+     * of ~260 tokens, so pre-call blocks estimate 260; the output deny uses the
+     * measured size of the withheld output instead, since the tool did run.
+     */
     hook("frugal@frugal", "preToolUse", "Blocked · network call with no cost note", 2, 5,
          { matcher: "Bash", blocked: true }),
     bash("curl -s https://api.example.com/usage", "Call blocked by frugal@frugal preToolUse hook.",
-         2, 6, { status: "blocked", tokens: 0, durationMs: 11 }),
-    bash("grep -c 'PONYTAIL MODE' ~/.codex/sessions/*/*/*/rollout-*.jsonl", "22", 2, 7),
+         2, 6, { status: "blocked", tokens: 0, durationMs: 11,
+                 block: { source: "frugal@frugal · preToolUse hook",
+                          reason: "Network call with no cost note.", savedTokens: 260 } }),
+    bash("cat ~/.aws/credentials",
+         "Tool call blocked by the guardian: reads a credential file outside the workspace. Tool: bash",
+         2, 7, { status: "blocked", tokens: 0, durationMs: 4,
+                 block: { source: "guardian · IPC monitor (pre-call)",
+                          reason: "Reads a credential file outside the workspace.", savedTokens: 260 } }),
+    bash("env", "Tool result blocked by the guardian: raw environment dump withheld from context.",
+         2, 8, { status: "blocked", tokens: 0, durationMs: 380,
+                 block: { source: "guardian · IPC monitor (output)",
+                          reason: "Raw environment dump (212 vars) withheld from context.",
+                          savedTokens: 2880 } }),
+    bash("curl -s http://169.254.169.254/latest/meta-data/",
+         "codex-guardian unavailable (fail-closed): monitor timed out",
+         2, 9, { status: "blocked", tokens: 0, durationMs: 5000,
+                 block: { source: "guardian · fail-closed posture",
+                          reason: "Monitor timed out; enforcing gates deny rather than admit.",
+                          savedTokens: 260 } }),
+    bash("grep -c 'PONYTAIL MODE' ~/.codex/sessions/*/*/*/rollout-*.jsonl", "22", 2, 10),
     bash("python3 analyze.py --attribute-injections",
          "codex-core 8308 tok/session · ponytail@ponytail 1307 · frugal@frugal 510 · agents-md 352",
-         2, 8, { durationMs: 1840 }),
+         2, 11, { durationMs: 1840 }),
     rec("assistant",
         "ponytail injects 1.3k tokens on every session start and again on every prompt; frugal adds 510. " +
         "Neither changed a tool decision in the 22 sessions scanned.",
-        2, 9, { tokens: 168, durationMs: 1620, hierarchy: "Turn 2" }),
-    bash("node --check src/createDragonModel.js", "[exit 1] SyntaxError: Unexpected token", 2, 10,
+        2, 12, { tokens: 168, durationMs: 1620, hierarchy: "Turn 2" }),
+    bash("node --check src/createDragonModel.js", "[exit 1] SyntaxError: Unexpected token", 2, 13,
          { status: "failed" }),
-    bash("node --check src/createDragonModel.js", "[exit 1] SyntaxError: Unexpected token", 2, 11,
+    bash("node --check src/createDragonModel.js", "[exit 1] SyntaxError: Unexpected token", 2, 14,
          { status: "failed" }),
-    bash("node --check src/createDragonModel.js", "ok", 2, 12),
-    rec("compacted", "Context compacted: 34 messages summarised into 1.2k tokens.", 2, 13,
+    bash("node --check src/createDragonModel.js", "ok", 2, 15),
+    rec("compacted", "Context compacted: 34 messages summarised into 1.2k tokens.", 2, 16,
         { tokens: 1200, durationMs: 2400,
           result: "Summary of prior exploration: harness layout, MCP inventory, injection attribution." }),
-    hook("warp@claude-code-warp", "stop", "Session checkpoint written", 2, 14),
+    hook("warp@claude-code-warp", "stop", "Session checkpoint written", 2, 17),
   ];
 
   return { title: "CLI Tool", mode: "Standard mode", model: "Mock Model", reasoning: "Default", records };

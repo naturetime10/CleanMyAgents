@@ -6,12 +6,12 @@
  * Our own implementation. Data is mock.
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { KIND_LABEL, laneOf, LANES, sessionEnd, tabsFor, totals,
+import { KIND_LABEL, laneOf, LANES, markSystemSkips, sessionEnd, tabsFor, totals,
          type Kind } from "./model";
 import { realNotes, realSession } from "./real-session";
 import {
   AGENT_COUNT, KIND_LABEL as NOTE_KIND, YOU, annotate, byRow, userNote, worst,
-  type Annotation,
+  type Annotation, type Kind as NoteKind,
 } from "./annotations";
 import "./trajectory.css";
 
@@ -52,6 +52,8 @@ const P = {
   user: "M8 8.2a2.7 2.7 0 1 0 0-5.4 2.7 2.7 0 0 0 0 5.4ZM2.8 13.8a5.2 5.2 0 0 1 10.4 0",
   gear: "M8 10.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4ZM8 1.5v1.7M8 12.8v1.7M14.5 8h-1.7M3.2 8H1.5M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2M12.6 12.6l-1.2-1.2M4.6 4.6 3.4 3.4",
   compact: "M2.5 4.5h11M2.5 11.5h11M6 8h4",
+  trash: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 9h5.6l.7-9M6.8 7.2v4M9.2 7.2v4",
+  shield: "M8 1.8l5 1.8v3.6c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.6z",
 };
 const Icon = ({ d }: { d: string }) => (
   <svg viewBox="0 0 16 16" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -117,7 +119,10 @@ function NoteCard({ notes, at, blocked, onBlock, onHold, onLeave }: {
 }
 
 export default function Trajectory() {
-  const session = realSession;
+  const session = useMemo(
+    () => ({ ...realSession, records: markSystemSkips(realSession.records) }),
+    [],
+  );
   const end = useMemo(() => sessionEnd(session), [session]);
   const sums = useMemo(() => totals(session), [session]);
 
@@ -289,10 +294,17 @@ export default function Trajectory() {
   const [actualDuration, setActualDuration] = useState(hasClock);
   const [foldTurns, setFoldTurns] = useState(false);
   const [foldCalls, setFoldCalls] = useState(false);
+  /** Show only rows carrying this annotation kind; null shows everything. */
+  const [noteFilter, setNoteFilter] = useState<NoteKind | null>(null);
+  /** Free-text filter over name, body and result. */
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
 
   const visible = session.records.filter((r) => {
     if (foldTurns && r.kind !== "user" && r.kind !== "system") return false;
     if (foldCalls && (r.kind === "tool" || r.kind === "subtool")) return false;
+    if (noteFilter && !notes.get(r.id)?.some((a) => a.kind === noteFilter)) return false;
+    if (q && !`${r.name ?? ""} ${r.text} ${r.result ?? ""}`.toLowerCase().includes(q)) return false;
     return true;
   });
 
@@ -334,6 +346,29 @@ export default function Trajectory() {
                     onClick={() => setFoldCalls((v) => !v)}>
               <Icon d={P.calls} />Calls
             </button>
+            <button type="button" aria-pressed={noteFilter === "waste"}
+                    title="Show only rows marked rubbish"
+                    onClick={() => setNoteFilter((f) => f === "waste" ? null : "waste")}>
+              <Icon d={P.trash} />Rubbish
+            </button>
+            <button type="button" aria-pressed={noteFilter === "security"}
+                    title="Show only rows marked security"
+                    onClick={() => setNoteFilter((f) => f === "security" ? null : "security")}>
+              <Icon d={P.shield} />Security
+            </button>
+            <input
+              className="tj-search" type="search" placeholder="Search log…"
+              value={query} onChange={(e) => setQuery(e.target.value)}
+            />
+            {q && (
+              // Search → select-all → the pick bar's Mark buttons: batch
+              // annotation is the existing flow, this just fills the selection.
+              <button type="button" disabled={visible.length === 0}
+                      title="Select every matching row for marking"
+                      onClick={() => setPicked(visible.map((r) => r.id))}>
+                Select {visible.length}
+              </button>
+            )}
           </div>
 
           <div className="tj-strip">
@@ -438,13 +473,25 @@ export default function Trajectory() {
             <div className="tj-pick">
               <span>{picked.length} steps</span>
               <button onClick={() => {
-                setMine((m) => [...m, ...userNote(picked, "waste", "")]);
-                setPicked([]);
-              }}>Mark waste</button>
-              <button onClick={() => {
                 setMine((m) => [...m, ...userNote(picked, "security", "")]);
                 setPicked([]);
-              }}>Mark spends</button>
+              }}>Mark security</button>
+              <button onClick={() => {
+                // Feeds the desktop's rubbish index; future similar tool calls
+                // get challenged before they run. Fire-and-forget: the local
+                // note is the UI truth, the index is the enforcement side.
+                for (const id of picked) {
+                  const r = session.records.find((x) => x.id === id);
+                  if (r) fetch("/rubbish", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ text: `${r.name ?? r.kind} ${r.text}`, rowId: r.id }),
+                  }).catch(() => {});
+                }
+                setMine((m) => [...m, ...userNote(picked, "waste",
+                  "Marked rubbish — similar tool calls will be challenged before they run.")]);
+                setPicked([]);
+              }}>Mark rubbish</button>
               <button className="tj-pick-x" onClick={() => setPicked([])}>Clear</button>
             </div>
           )}
@@ -519,13 +566,16 @@ export default function Trajectory() {
                               <span className="tj-result" data-error={bad || undefined}>{r.result}</span>
                             </>}
                             {bad && <span className="tj-flag">{r.status}</span>}
+                            {r.block && <span className="tj-flag" data-skip>
+                              skip · save {fmtTok(r.block.savedTokens)}
+                            </span>}
                             {notes.has(r.id) && (
                               <span className="tj-note"
                                     data-kind={notes.get(r.id)![0].kind}
                                     data-blocked={blocked.has(r.id) || undefined}>
                                 {blocked.has(r.id) ? "blocked"
-                                  : notes.get(r.id)![0].kind === "security" ? "spends"
-                                  : "waste"}
+                                  : notes.get(r.id)![0].kind === "security" ? "security"
+                                  : "rubbish"}
                                 {notes.get(r.id)!.length > 1 ? ` ×${notes.get(r.id)!.length}` : ""}
                               </span>
                             )}
@@ -567,6 +617,12 @@ export default function Trajectory() {
                           </dd>
                           <dt>Context cost</dt>
                           <dd>{current.tokens ? `${current.tokens.toLocaleString()} tokens` : "none"}</dd>
+                          {current.block && <>
+                            <dt>Blocked by</dt><dd data-error>{current.block.source}</dd>
+                            <dt>Reason</dt><dd>{current.block.reason}</dd>
+                            <dt>Tokens saved</dt>
+                            <dd>~{current.block.savedTokens.toLocaleString()} (est.)</dd>
+                          </>}
                           {current.hook && <>
                             <dt>Fired by</dt><dd>{current.hook.plugin} · {current.hook.event}</dd>
                           </>}
@@ -635,6 +691,11 @@ export default function Trajectory() {
             <span>Cache hit 93%</span><i>|</i>
             <span>Input {fmtTok(sums.inputTokens)} tok · Output {fmtTok(sums.outputTokens)}</span><i>|</i>
             <span className="hot">Hooks injected {fmtTok(sums.hookTokens)} tok</span><i>|</i>
+            {sums.blockedCalls > 0 && <>
+              <span className="hot">
+                {sums.blockedCalls} calls skipped · ~{fmtTok(sums.savedTokens)} tok saved
+              </span><i>|</i>
+            </>}
             {/* Says where the marks came from, and that several readers agreed. */}
             <span title={realSession.source}>{AGENT_COUNT} agents · {notes.size} rows marked
               {blocked.size ? ` · ${blocked.size} blocked` : ""}</span>
