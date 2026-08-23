@@ -46,6 +46,16 @@ export interface Record_ {
   payload?: string;
   schema?: { name: string; description: string };
   hook?: { plugin: string; event: string; matcher?: string; blocked?: boolean };
+  /**
+   * Set when the system refused this call. `source` names the layer that
+   * decided (guard, hook, fail posture — the codex-side precedence is
+   * Guard -> Hooks -> review -> user), `reason` is the string that layer
+   * surfaced, and `savedTokens` is the context the refusal kept out:
+   * measured output size when the result was withheld after the run,
+   * the median result of completed calls to the same tool when the call
+   * never ran.
+   */
+  block?: { source: string; reason: string; savedTokens: number };
   hierarchy?: string;
 }
 
@@ -82,6 +92,27 @@ export function tabsFor(r: Record_): { id: string; label: string }[] {
   return [{ id: "summary", label: "Summary" }, { id: "raw", label: "Raw" }];
 }
 
+/**
+ * Marks tool calls the system would skip: from the third identical call on,
+ * the context cost is pure duplicate, so `savedTokens` is the record's own
+ * measured cost — not an estimate. Sessions recorded before the guardian get
+ * their skips derived here; a feed that already sets `block` is left alone.
+ */
+export function markSystemSkips(records: Record_[]): Record_[] {
+  const seen = new Map<string, number>();
+  return records.map((r) => {
+    if (r.kind !== "tool" && r.kind !== "subtool") return r;
+    const n = (seen.get(r.text) ?? 0) + 1;
+    seen.set(r.text, n);
+    if (n < 3 || r.block) return r;
+    return { ...r, block: {
+      source: "system · duplicate-call breaker",
+      reason: `Identical call already ran ${n - 1} times this session.`,
+      savedTokens: r.tokens,
+    } };
+  });
+}
+
 export const sessionEnd = (s: Session) =>
   Math.max(1, ...s.records.map((r) => r.startedAt + r.durationMs));
 
@@ -116,10 +147,13 @@ export interface Totals {
   hookTokens: number;
   inputTokens: number;
   outputTokens: number;
+  blockedCalls: number;
+  /** Estimated context the blocks kept out. Sum of per-record estimates. */
+  savedTokens: number;
 }
 
 export function totals(s: Session): Totals {
-  const t: Totals = { turns: 0, steps: 0, llmMs: 0, toolMs: 0, hookTokens: 0, inputTokens: 0, outputTokens: 0 };
+  const t: Totals = { turns: 0, steps: 0, llmMs: 0, toolMs: 0, hookTokens: 0, inputTokens: 0, outputTokens: 0, blockedCalls: 0, savedTokens: 0 };
   for (const r of s.records) {
     t.turns = Math.max(t.turns, r.turn);
     t.steps += 1;
@@ -127,6 +161,7 @@ export function totals(s: Session): Totals {
     else if (r.kind === "tool" || r.kind === "subtool") t.toolMs += r.durationMs;
     else t.inputTokens += r.tokens;
     if (r.kind === "hook") t.hookTokens += r.tokens;
+    if (r.block) { t.blockedCalls += 1; t.savedTokens += r.block.savedTokens; }
   }
   return t;
 }

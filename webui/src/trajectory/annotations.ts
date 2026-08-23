@@ -20,9 +20,11 @@ import type { Record_ } from "./model";
  */
 export type Kind = "waste" | "security";
 
+/** `waste` is displayed as "rubbish" everywhere; the value stays `waste`
+ *  because generated sessions (real-session.ts) already carry it. */
 export const KIND_LABEL: Record<Kind, string> = {
-  waste: "Paying for nothing",
-  security: "Spends or reaches out",
+  waste: "Rubbish — paying for nothing",
+  security: "Security — spends or reaches out",
 };
 
 export type Severity = "critical" | "warn" | "info";
@@ -172,7 +174,7 @@ export function userNote(rowIds: string[], kind: Kind, detail: string): Annotati
     // A person marking a row is stating it, not estimating it.
     severity: kind === "security" ? "critical" : "warn",
     agent: YOU,
-    title: kind === "security" ? "Marked: spends or reaches out" : "Marked: paying for nothing",
+    title: kind === "security" ? "Marked: security" : "Marked: rubbish",
     detail: detail || "Marked by hand.",
     blockable: true,
   }));

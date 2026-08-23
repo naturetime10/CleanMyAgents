@@ -62,6 +62,12 @@
 .tj-bar button:hover { background: #f0f0ed; }
 .tj-bar button[aria-pressed="true"] { background: #eaeae6; color: var(--ink); border-color: var(--line); }
 .tj-bar svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.tj-search {
+  margin-left: auto; width: 200px;
+  font: inherit; font-size: 12.5px; color: var(--ink);
+  background: #f0f0ed; border: 1px solid transparent; border-radius: 6px; padding: 5px 10px;
+}
+.tj-search:focus { outline: none; background: var(--card); border-color: var(--line); }
 
 /* ── overview strip ── */
 .tj-strip {
@@ -167,6 +173,8 @@
   flex: none; font-size: 10px; padding: 1px 7px; border-radius: 20px;
   background: #fdeceb; color: #b4322f;
 }
+/* a skip is a saving, not a failure */
+.tj-flag[data-skip] { background: #e8f4ec; color: #1f7a3d; }
 .tj-tokens {
   font: 11px var(--mono); color: var(--ink3);
   text-align: right; padding-right: 14px !important; white-space: nowrap;
