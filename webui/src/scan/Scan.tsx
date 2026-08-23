@@ -10,7 +10,7 @@ import {
   SOURCE_LABEL, actionable, defaultPicks, optionOf, reclaimsOf,
   type Finding, type Severity, type Target,
 } from "./model";
-import { fetchScan, fetchSessions, type Scope as ScanScope, type ScanReport } from "./api";
+import { fetchDeepScan, fetchScan, fetchSessions, type Scope as ScanScope, type ScanReport } from "./api";
 import Scope from "./Scope";
 import "./scan.css";
 
@@ -190,8 +190,20 @@ export default function Scan() {
   const [report, setReport] = useState<ScanReport | null>(null);
   const [progress, setProgress] = useState(0);
   const [picks, setPicks] = useState<Record<string, string>>({});
+  const [deep, setDeep] = useState<{ state: "idle" | "running" | "done" | "error"; n?: number; error?: string }>({ state: "idle" });
   const raf = useRef(0);
   const arrived = useRef<ScanReport | null>(null);
+
+  const runDeep = () => {
+    setDeep({ state: "running" });
+    fetchDeepScan()
+      .then(({ findings: extra }) => {
+        setReport((r) => r && { ...r, findings: [...r.findings, ...extra] });
+        setPicks((p) => ({ ...defaultPicks(extra), ...p }));
+        setDeep({ state: "done", n: extra.length });
+      })
+      .catch((e: Error) => setDeep({ state: "error", error: e.message }));
+  };
 
   useEffect(() => () => cancelAnimationFrame(raf.current), []);
 
@@ -199,6 +211,7 @@ export default function Scan() {
     setStage("scanning");
     setProgress(0);
     setReport(null);
+    setDeep({ state: "idle" });
     arrived.current = null;
     void fetchScan(scope).then((r) => { arrived.current = r; });
 
@@ -326,6 +339,27 @@ export default function Scan() {
         {report.baselinePerSession ? (
           <Reclaim baseline={report.baselinePerSession} saved={nowTokens} />
         ) : null}
+
+        {!applied && (
+          <div className="sc-deep" data-state={deep.state}>
+            {deep.state === "running" ? (
+              <span className="sc-deep-note"><i className="sc-deep-spin" aria-hidden />Grok is reading the session log — this takes a few minutes…</span>
+            ) : deep.state === "done" ? (
+              <span className="sc-deep-note">Deep scan done · {deep.n} finding{deep.n === 1 ? "" : "s"} from Grok</span>
+            ) : (
+              <>
+                <span className="sc-deep-note">
+                  {deep.state === "error"
+                    ? `Deep scan failed: ${deep.error}`
+                    : "Send this session's log to your Grok agent for a deeper annotation pass."}
+                </span>
+                <button className="sc-deep-btn" onClick={runDeep}>
+                  {deep.state === "error" ? "Retry deep scan" : "Deep Scan"}
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         <div className="sc-list">
           {sorted.map((f) => (

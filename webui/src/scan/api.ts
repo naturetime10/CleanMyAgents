@@ -103,3 +103,16 @@ export async function fetchScan(scope: Scope): Promise<ScanReport> {
 }
 
 const recommendedOf = (f: Finding) => f.options.find((o) => o.id === f.recommend);
+
+/**
+ * Deep scan: the desktop backend ships the rollout log to the user's Equile
+ * Grok agent and long-polls until the annotations come back. No timeout — the
+ * run takes minutes — and no mock fallback: a remote annotation pass on sample
+ * data would be a lie, so failure is reported as failure.
+ */
+export async function fetchDeepScan(): Promise<{ file: string; findings: Finding[] }> {
+  const res = await fetch(`${BASE}/deep-scan`, { method: "POST" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body) throw new Error(body?.error ?? `deep scan failed (${res.status})`);
+  return body as { file: string; findings: Finding[] };
+}
