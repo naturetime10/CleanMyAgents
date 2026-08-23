@@ -26,18 +26,29 @@ context-window occupancy.
 
 ```toml
 [guardian]
-# off (default) | csv
+# off (default) | csv | ipc | both
 mode = "csv"
 # Per-session CSV history. Default: $CODEX_HOME/guardian/debug
 debug_dir = "/Users/me/.codex/guardian/debug"
+# Socket of the resident guardian process. Default: $CODEX_HOME/guardian/guardian.sock
+socket_path = "/Users/me/.codex/guardian/guardian.sock"
+# Deny guarded actions when the guardian cannot be reached. Default: true
+fail_closed = true
+# Deadline for one round trip to the guardian process. Default: 3000
+request_timeout_ms = 3000
 ```
 
-With `mode = "off"` the guard is a no-op: nothing is reviewed and nothing is
-recorded, and the choke points cost one virtual call each.
+- `csv` writes one CSV file per session, `<debug_dir>/<thread_id>.csv`, with a
+  fixed header and one row per guarded action and recorded activity. It never
+  denies anything; it is a debugging and audit record.
+- `ipc` delegates every decision to a resident local process listening on
+  `socket_path`, exchanging newline-delimited JSON: the request carries the
+  session context plus the action, and the reply carries a verdict of `allow`,
+  `deny`, `rewrite`, or `defer`. `rewrite` replaces a prompt, a tool input, or a
+  tool result; `defer` falls through to the layers below.
+- `both` records locally and enforces through the resident process.
 
-`csv` writes one CSV file per session, `<debug_dir>/<thread_id>.csv`, with a
-fixed header and one row per guarded action and recorded activity. Rows carry
-the session and turn ids, the tool and call id where there is one, the decision,
-token and context-window counters, and a truncated JSON `detail` column. It
-never denies anything: it is a debugging and audit record, written by a
-background task so the turn path never blocks on disk.
+With `fail_closed = true` (the default), an unreachable guardian denies guarded
+actions, so a session started in `ipc` mode without a running guardian will have
+its tool calls blocked. Set `mode = "off"` or `fail_closed = false` to opt out of
+that posture.
