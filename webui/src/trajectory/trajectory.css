@@ -65,6 +65,7 @@
 
 /* ── overview strip ── */
 .tj-strip {
+  position: relative;
   display: grid; grid-template-columns: 62px minmax(0, 1fr);
   height: 64px; background: var(--card); border-bottom: 1px solid var(--line); overflow: hidden;
 }
@@ -77,7 +78,7 @@
 .tj-lanes span:nth-child(2) { top: 21px; }
 .tj-lanes span:nth-child(3) { top: 35px; }
 .tj-lanes span:nth-child(4) { top: 49px; }
-.tj-track { position: relative; overflow: hidden; }
+.tj-track { position: relative; }
 .tj-blk {
   position: absolute; height: 8px; min-width: 2px; border-radius: 2px;
   border: 0; padding: 0; cursor: pointer; opacity: 0.9;
@@ -322,3 +323,29 @@
 
 /* A mark you made yourself is attributed differently from an agent's. */
 .tj-card-agent[data-you] { color: var(--k-user); font-weight: 600; }
+
+/* ── panning the strip ── */
+.tj-track { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.tj-track::-webkit-scrollbar { display: none; }
+.tj-track[data-pannable] { cursor: grab; }
+.tj-track[data-pannable]:active { cursor: grabbing; }
+/* The inner layer is what grows with zoom; blocks are positioned against it,
+   so their percentages keep meaning the same thing at any magnification. */
+.tj-track-in { position: relative; height: 100%; min-width: 100%; }
+
+/* Where the ledger is looking. Two dimmers rather than one outline: the eye
+   reads "the rest is elsewhere" faster than it reads a frame. */
+.tj-view { position: absolute; inset: 0; pointer-events: none; }
+.tj-view::before, .tj-view::after {
+  content: ""; position: absolute; top: 0; bottom: 0;
+  background: rgba(255, 255, 255, 0.62);
+}
+.tj-view::before { left: 0; width: var(--from); }
+.tj-view::after { right: 0; width: var(--to); }
+
+.tj-zoom {
+  position: absolute; right: 8px; top: 6px; z-index: 3;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--card);
+  padding: 2px 7px; font: 500 10.5px var(--mono); color: var(--ink2); cursor: pointer;
+}
+.tj-zoom:hover { color: var(--ink); background: #fafaf9; }

@@ -113,6 +113,20 @@ export default function Trajectory() {
   );
   /** A range picked with shift-click, waiting to be marked. */
   const [picked, setPicked] = useState<string[]>([]);
+
+  /**
+   * How much wider than its container the strip is drawn.
+   *
+   * At 1 the whole session fits and there is nothing to pan; past that the
+   * strip becomes a scrollable timeline, which is the only way individual
+   * steps stay distinguishable in a long session.
+   */
+  const [zoom, setZoom] = useState(1);
+  const trackRef = useRef<HTMLDivElement>(null);
+  /** Fraction of the session currently visible in the ledger, for the marker. */
+  const [view, setView] = useState({ from: 0, to: 1 });
+  /** Set while the strip is panning itself, so the two do not fight. */
+  const syncing = useRef(false);
   /** Rows the user has chosen to block. Local state; nothing is written. */
   const [blocked, setBlocked] = useState<Set<string>>(() => new Set());
   /** The row whose annotation card is open, and where to put it. */
@@ -144,10 +158,46 @@ export default function Trajectory() {
   };
   const holdCard = () => clearTimeout(closeTimer.current);
 
+  /** Click-drag anywhere on the strip pans it; no scrollbar to aim at. */
+  const startPan = (e: React.MouseEvent) => {
+    const el = trackRef.current;
+    if (!el || el.scrollWidth <= el.clientWidth) return;
+    const x0 = e.clientX, s0 = el.scrollLeft;
+    const move = (ev: MouseEvent) => { el.scrollLeft = s0 - (ev.clientX - x0); };
+    const up = () => {
+      removeEventListener("mousemove", move);
+      removeEventListener("mouseup", up);
+      document.body.style.cursor = "";
+    };
+    addEventListener("mousemove", move);
+    addEventListener("mouseup", up);
+    document.body.style.cursor = "grabbing";
+  };
+
   const [selected, setSelected] = useState<string | null>(
     session.records.find((r) => r.kind === "tool")?.id ?? null,
   );
   const [tab, setTab] = useState("summary");
+
+  /**
+   * The ledger drives the strip.
+   *
+   * Scrolling the log moves the visible-range marker and pans the strip to keep
+   * it on screen, so the two views never disagree about where you are.
+   */
+  const onLedgerScroll = () => {
+    const led = ledgerRef.current, track = trackRef.current;
+    if (!led) return;
+    const max = Math.max(1, led.scrollHeight - led.clientHeight);
+    const from = led.scrollTop / (max + led.clientHeight);
+    const to = (led.scrollTop + led.clientHeight) / (max + led.clientHeight);
+    setView({ from, to });
+    if (!track || track.scrollWidth <= track.clientWidth) return;
+    syncing.current = true;
+    const centre = ((from + to) / 2) * track.scrollWidth;
+    track.scrollLeft = centre - track.clientWidth / 2;
+    requestAnimationFrame(() => { syncing.current = false; });
+  };
   const [actualDuration, setActualDuration] = useState(true);
   const [foldTurns, setFoldTurns] = useState(false);
   const [foldCalls, setFoldCalls] = useState(false);
@@ -159,6 +209,10 @@ export default function Trajectory() {
   });
 
   const ledgerRef = useRef<HTMLDivElement>(null);
+  // The marker is derived from a scroll event, so nothing has sized it before
+  // the first one. Measure once the ledger exists.
+  useEffect(() => { onLedgerScroll(); }, []);
+
   useEffect(() => {
     if (!selected) return;
     const row = ledgerRef.current?.querySelector(`[data-row-id="${selected}"]`);
@@ -194,7 +248,26 @@ export default function Trajectory() {
 
           <div className="tj-strip">
             <div className="tj-lanes">{LANES.map((l) => <span key={l}>{l}</span>)}</div>
-            <div className="tj-track">
+            <div
+              className="tj-track"
+              ref={trackRef}
+              data-pannable={zoom > 1 || undefined}
+              onMouseDown={startPan}
+              onWheel={(e) => {
+                // Modifier zooms, plain wheel pans. A bare wheel that zoomed
+                // would fight the page scroll on the way past.
+                if (e.ctrlKey || e.metaKey) {
+                  setZoom((z) => Math.min(12, Math.max(1, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
+                } else if (trackRef.current) {
+                  trackRef.current.scrollLeft += e.deltaY + e.deltaX;
+                }
+              }}
+            >
+              <div className="tj-track-in" style={{ width: `${zoom * 100}%` }}>
+                <div className="tj-view" style={{
+                  "--from": `${view.from * 100}%`,
+                  "--to": `${(1 - view.to) * 100}%`,
+                } as CSSProperties} />
               {/* A band the full height of the strip, aligned to the step it
                   marks. Geometry is computed here rather than left to CSS:
                   `min-width` only ever grows to the right, so a narrow block
@@ -242,12 +315,26 @@ export default function Trajectory() {
                         || (foldTurns && r.kind !== "user" && r.kind !== "system");
                       if (hidden) { setFoldCalls(false); setFoldTurns(false); }
                       setSelected(r.id);
+                      // From the strip the row is usually off-screen, so centre
+                      // it. `nearest` is right for ledger clicks and useless here.
+                      requestAnimationFrame(() => {
+                        ledgerRef.current?.querySelector(`[data-row-id="${r.id}"]`)?.scrollIntoView({
+                          block: "center",
+                          behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+                        });
+                      });
                     }}
                     aria-label={`${KIND_LABEL[r.kind]} ${r.text.slice(0, 40)}`}
                   />
                 );
               })}
+              </div>
             </div>
+            {zoom > 1 && (
+              <button className="tj-zoom" onClick={() => setZoom(1)} title="Fit the whole session">
+                {zoom.toFixed(1)}×
+              </button>
+            )}
           </div>
 
           {picked.length > 0 && (
@@ -281,7 +368,7 @@ export default function Trajectory() {
           )}
 
           <div className="tj-split">
-            <div className="tj-ledger" ref={ledgerRef}>
+            <div className="tj-ledger" ref={ledgerRef} onScroll={onLedgerScroll}>
               <table className="tj-table">
                 <colgroup>
                   <col className="tj-col-event" /><col /><col className="tj-col-tokens" />
