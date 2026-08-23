@@ -100,10 +100,11 @@ let blockedIndex;
 let sessions;
 const threadOf = (x) => x?.context?.thread_id ?? x?.ctx?.thread_id ?? x?.thread_id;
 
-function handleRubbish(req, res) {
+// GET lists, POST {text} adds, DELETE {text} prunes — same shape for both indexes
+function handleIndex(store, req, res) {
   res.setHeader("content-type", "application/json");
-  if (req.method !== "POST") {
-    return res.end(JSON.stringify({ count: rubbish.size(), texts: rubbish.texts().slice(-20) }));
+  if (req.method === "GET") {
+    return res.end(JSON.stringify({ count: store.size(), texts: store.texts().slice(-20) }));
   }
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
@@ -111,7 +112,10 @@ function handleRubbish(req, res) {
     try {
       const { text } = JSON.parse(Buffer.concat(chunks).toString());
       if (!text) throw new Error("no text");
-      res.end(JSON.stringify({ ok: true, count: rubbish.add(String(text)) }));
+      if (req.method === "DELETE") {
+        return res.end(JSON.stringify({ ok: store.remove(String(text)), count: store.size() }));
+      }
+      res.end(JSON.stringify({ ok: true, count: store.add(String(text)) }));
     } catch { res.statusCode = 400; res.end('{"ok":false,"error":"expected {text}"}'); }
   });
 }
@@ -197,6 +201,10 @@ function handleDecision(req, res) {
 // app running for weeks.
 const reviews = new Map(); // id → { status: "pending"|"decided", verdict? }
 const idem = new Map();    // idempotency-key → review id (a retry must not re-decide)
+// One human answer covers the turn: codex reviews the same action at up to
+// three gates (prompt, tool_call, tool_output), and asking three times for the
+// same rule hits in the same turn is noise, not safety.
+const turnGrants = new Map(); // `${turn_id}|${hits}` → allow
 
 const verdictFor = (allow) =>
   allow ? { decision: "allow" } : { decision: "deny", reason: "denied by CleanMyAgent" };
@@ -228,8 +236,12 @@ function handleReviewPost(req, res) {
 
     const text = JSON.stringify(body.action ?? "");
     const tool = body.action?.tool_name ?? body.action?.tool ?? body.action?.type ?? "codex";
-    const hits = scan(text);
-    const junk = rubbish.match(text);
+    // keyword rules describe actions; a tool *output* is not one, so it only
+    // faces the vector checks — this alone drops one popup per flagged call
+    const hits = body.action?.action === "tool_output" ? [] : scan(text);
+    // the rubbish index is taste, not danger: match it strictly (0.90) so it
+    // challenges near-duplicates, not everything in the same neighbourhood
+    const junk = rubbish.match(text, 0.90);
     if (junk) hits.push("rubbish-similar");
     const past = blockedIndex.match(text);
     if (past) hits.push("similar-to-blocked");
@@ -254,6 +266,14 @@ function handleReviewPost(req, res) {
       logReview(verdictFor(saved === "allow"), `rule-${saved}`);
       return respondReview(res, id);
     }
+    // a human already answered for these hits in this turn — honour it
+    const turnKey = `${body.context?.turn_id ?? ""}|${hits.join(",")}`;
+    if (body.context?.turn_id && turnGrants.has(turnKey)) {
+      const allow = turnGrants.get(turnKey);
+      reviews.set(id, { status: "decided", verdict: verdictFor(allow) });
+      logReview(verdictFor(allow), "turn-grant");
+      return respondReview(res, id);
+    }
     reviews.set(id, { status: "pending" });
     const near = [junk, past].filter(Boolean).sort((a, b) => b.sim - a.sim)[0];
     // adapter: settle() answers an http res; here the answer lands in the map
@@ -265,6 +285,7 @@ function handleReviewPost(req, res) {
       { end: (out) => {
           const allow = JSON.parse(out).allow;
           reviews.set(id, { status: "decided", verdict: verdictFor(allow) });
+          if (body.context?.turn_id) turnGrants.set(turnKey, allow);
           logReview(verdictFor(allow), "island");
         } },
       ruleKey);
@@ -398,11 +419,9 @@ function serveApp() {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
     if (path === "/events") return handleEvents(req, res, url);
-    if (path === "/rubbish") return handleRubbish(req, res);
-    if (path === "/blocked") { // read-only: the index fills itself from denials
-      res.setHeader("content-type", "application/json");
-      return res.end(JSON.stringify({ count: blockedIndex.size(), texts: blockedIndex.texts().slice(-20) }));
-    }
+    if (path === "/rubbish") return handleIndex(rubbish, req, res);
+    // POST is deliberately absent for /blocked: it fills itself from denials
+    if (path === "/blocked" && req.method !== "POST") return handleIndex(blockedIndex, req, res);
     if (path === "/toolcall" && req.method === "POST") return handleToolcall(req, res);
     if (path === "/v1/reviews" && req.method === "POST") return handleReviewPost(req, res);
     if (path.startsWith("/v1/reviews/") && req.method === "GET") {
