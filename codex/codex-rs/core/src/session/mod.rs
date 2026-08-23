@@ -212,6 +212,7 @@ mod code_mode_warning;
 pub(crate) mod context_window;
 mod environment;
 pub(crate) mod extension_metrics;
+pub(crate) mod guardian_tap;
 mod handlers;
 mod inject;
 mod input_queue;
@@ -282,6 +283,8 @@ use crate::shell;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
+use codex_guardian::Activity;
+
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -4069,13 +4072,23 @@ impl Session {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
-        // TODO(codex-monitor): TOKEN-USAGE TAP. This is the single choke point for
-        // token accounting (`info`: input/output/total tokens per TokenUsageInfo, plus
-        // rate limits), emitted after each model response. NOTE: token usage is NOT
-        // available on the hook/shim path — the daemon never sees it via the socket, so
-        // this requires a code-level tap: forward `info` + `rate_limits` (keyed by
-        // session_id/turn_id from `turn_context`) to the monitor for per-user/team
-        // token-spend analytics. Raw provider usage originates in client.rs (~:2093).
+        // TOKEN-USAGE TAP: the single choke point for token accounting, emitted
+        // after each model response. Token usage never reaches the hook path, so
+        // this has to be a code-level tap.
+        if let Some(usage) = info.as_ref().map(|info| &info.total_token_usage) {
+            guardian_tap::record(
+                self,
+                turn_context,
+                Activity::TokenUsage {
+                    input_tokens: usage.input_tokens,
+                    cached_input_tokens: usage.cached_input_tokens,
+                    output_tokens: usage.output_tokens,
+                    reasoning_output_tokens: usage.reasoning_output_tokens,
+                    total_tokens: usage.total_tokens,
+                },
+            )
+            .await;
+        }
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
     }

@@ -86,3 +86,68 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
         Some("plan contributed assistant text")
     );
 }
+
+#[test]
+fn a_prompt_rewrite_replaces_the_text_and_keeps_images() {
+    let mut input_item = TurnInput::UserInput {
+        content: vec![
+            UserInput::Text {
+                text: "original".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Image {
+                image_url: "data:image/png;base64,AAAA".to_string(),
+                detail: None,
+            },
+            UserInput::Text {
+                text: "trailing".to_string(),
+                text_elements: Vec::new(),
+            },
+        ],
+        client_id: Some("client".to_string()),
+    };
+
+    rewrite_user_input(&mut input_item, serde_json::json!("redacted"));
+
+    let TurnInput::UserInput { content, client_id } = input_item else {
+        panic!("rewriting must keep the input a user prompt");
+    };
+    assert_eq!(client_id.as_deref(), Some("client"));
+    assert_eq!(
+        content,
+        vec![
+            UserInput::Text {
+                text: "redacted".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Image {
+                image_url: "data:image/png;base64,AAAA".to_string(),
+                detail: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_structured_prompt_rewrite_is_serialized_into_text() {
+    let mut input_item = TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "original".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    };
+
+    rewrite_user_input(&mut input_item, serde_json::json!({ "note": "rewritten" }));
+
+    let TurnInput::UserInput { content, .. } = input_item else {
+        panic!("rewriting must keep the input a user prompt");
+    };
+    assert_eq!(
+        content,
+        vec![UserInput::Text {
+            text: r#"{"note":"rewritten"}"#.to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+}

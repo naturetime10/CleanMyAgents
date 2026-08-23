@@ -418,8 +418,8 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     }
     sess.guardian_review_session.shutdown().await;
 
-    // TODO(codex-monitor): session teardown point; monitor tap lives in
-    // `hook_runtime::run_session_end_hooks`.
+    // Session teardown. The guard's session-end record and flush happen inside
+    // `run_session_end_hooks`, before the hook layer shuts down.
     crate::hook_runtime::run_session_end_hooks(sess).await;
 }
 

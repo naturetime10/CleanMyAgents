@@ -14,6 +14,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
 use crate::mcp_tool_exposure::McpHandlerCache;
+use crate::session::guardian_tap::GuardianIdentity;
 use crate::tools::ExecutedToolCallRecorder;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -27,6 +28,7 @@ use codex_core_plugins::PluginsManager;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
+use codex_guardian::Guardian;
 use codex_hooks::Hooks;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthManager;
@@ -91,6 +93,11 @@ pub(crate) struct SessionServices {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) time_provider: Arc<dyn TimeProvider>,
+    /// Inline reference monitor consulted above the hook layer at every guard
+    /// gate, and fed by every recording tap.
+    pub(crate) guardian: Arc<dyn Guardian>,
+    /// Authenticated identity stamped onto every guarded action and record.
+    pub(crate) guardian_identity: GuardianIdentity,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) executed_tool_calls: Option<Arc<ExecutedToolCallRecorder>>,

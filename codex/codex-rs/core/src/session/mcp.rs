@@ -136,6 +136,8 @@ impl Session {
                 executor_capability_discovery.as_deref(),
             )
             .await;
+        // GUARD GATE: admission control, before any of these servers connect.
+        let mcp_projection = self.admit_mcp_servers(mcp_projection).await;
         let mcp_config = self
             .project_selected_environment_mcp_servers(config, &environments, mcp_projection)
             .await
