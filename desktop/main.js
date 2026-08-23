@@ -1,9 +1,7 @@
-// CleanMyAgent desktop — menu bar tray with a CleanMyMac-style status panel.
-// Full app window serves webui/dist; /snapshot + /apply proxy to the ops sidecar.
-//   npm start           (live: needs codex on PATH)
-//   npm start -- --demo (canned data)
+// CleanMyAgent desktop — menu bar tray with a CleanMyMac-style status panel,
+// the tool-call gate, and the guardian API codex reports to.
+//   npm start
 import { app, Tray, BrowserWindow, screen } from "electron";
-import { spawn } from "node:child_process";
 import { createServer, request } from "node:http";
 import { appendFileSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
@@ -13,20 +11,20 @@ import { createEquile } from "@nodus-ai/equile";
 import { createRubbishStore } from "./similarity.js";
 import { createSessionStore } from "./store.js";
 
-const API_PORT = 4488;   // ops sidecar (data API)
+// Optional ops sidecar. Nothing in this app starts one: /snapshot and /apply
+// are proxied if something is already listening, and answer 502 otherwise —
+// the panel says "Connecting…" and every other feature is unaffected.
+const API_PORT = 4488;
 const APP_PORT = 4490;   // webui/dist + API proxy, same-origin like prod (4499 is vite dev's)
-// ponytail: data engine still lives in the sibling clownfish repo; move it into backend/ when it's ported
-const CLI = fileURLToPath(new URL("../../clownfish/src/cli.ts", import.meta.url));
 const DIST = fileURLToPath(new URL("../webui/dist/", import.meta.url));
 const PANEL = fileURLToPath(new URL("./panel.html", import.meta.url));
-const demo = process.argv.includes("--demo");
 
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
                ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json" };
 
 app.setName("CleanMyAgent"); // userData → ~/Library/Application Support/CleanMyAgent
 
-let tray, win, sidecar;
+let tray, win;
 
 // tiny ingest backend: external tools (hooks, scripts) POST events here
 // ponytail: in-memory + JSONL append; a real store when someone needs queries
@@ -441,6 +439,19 @@ function serveApp() {
     }
     if (path === "/decision" && req.method === "POST") return handleDecision(req, res);
     if (path === "/deep-scan" && req.method === "POST") return handleDeepScan(req, res);
+    // /sessions is the guardian's per-thread store; the codex rollout files on
+    // disk are a different thing and live here
+    if (path === "/rollouts") {
+      res.setHeader("content-type", "application/json");
+      return res.end(JSON.stringify(rollouts().map(({ path: _p, ...s }) => s)));
+    }
+    // ?id= picks one and makes it current; bare GET returns whatever is current
+    if (path === "/rollout") {
+      res.setHeader("content-type", "application/json");
+      return loadSession(url.searchParams.get("id"))
+        .then((s) => res.end(JSON.stringify(s ?? { error: "no session" })))
+        .catch((e) => { res.statusCode = 500; res.end(JSON.stringify({ error: String(e?.message ?? e) })); });
+    }
     if (path === "/island") {
       res.setHeader("content-type", "text/html");
       return res.end(readFileSync(fileURLToPath(new URL("./island.html", import.meta.url))));
@@ -489,13 +500,6 @@ function openFullApp() {
 app.whenReady().then(() => {
   app.dock?.hide();
 
-  // reuse an already-running sidecar (e.g. started by `npm run dev` elsewhere), else spawn one
-  fetch(`http://127.0.0.1:${API_PORT}/snapshot`).catch(() => {
-    sidecar = spawn(process.execPath, [CLI, "ui", String(API_PORT), ...(demo ? ["--demo"] : [])], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-      stdio: ["ignore", "inherit", "inherit"],
-    });
-  });
   loadEvents();
   loadRules();
   rubbish = createRubbishStore(join(app.getPath("userData"), "rubbish.json"));
@@ -528,4 +532,3 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {}); // tray app: keep running
-app.on("before-quit", () => sidecar?.kill());
