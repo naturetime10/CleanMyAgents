@@ -261,6 +261,9 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
             /*concurrent_reasoning_summaries_enabled*/ false,
+            config
+                .features
+                .enabled(Feature::ChatMessageMetadataPassthrough),
             /*attestation_provider*/ None,
             config.http_client_factory(),
         );

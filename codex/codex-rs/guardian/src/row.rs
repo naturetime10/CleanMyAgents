@@ -7,11 +7,13 @@ use crate::Verdict;
 ///
 /// The column set is fixed so the file stays trivially greppable and
 /// spreadsheet-openable; anything variable lands in `detail` as JSON.
+///
+/// Whatever is constant for the whole file -- the thread and session it
+/// belongs to, the account, the working directory -- lives in the metadata
+/// sidecar instead of being repeated on every row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivityRow {
     pub ts: String,
-    pub thread_id: String,
-    pub session_id: String,
     pub turn_id: String,
     pub kind: String,
     pub phase: String,
@@ -24,8 +26,6 @@ pub struct ActivityRow {
     pub tokens_total: String,
     pub context_used: String,
     pub context_limit: String,
-    pub account: String,
-    pub cwd: String,
     pub detail: String,
 }
 
@@ -102,8 +102,6 @@ impl ActivityRow {
     fn base(ctx: &ActivityContext) -> Self {
         Self {
             ts: ctx.timestamp.to_rfc3339(),
-            thread_id: ctx.thread_id.clone(),
-            session_id: ctx.session_id.clone(),
             turn_id: ctx.turn_id.clone(),
             kind: String::new(),
             phase: String::new(),
@@ -116,8 +114,6 @@ impl ActivityRow {
             tokens_total: String::new(),
             context_used: String::new(),
             context_limit: String::new(),
-            account: ctx.account.clone().unwrap_or_default(),
-            cwd: ctx.cwd.display().to_string(),
             detail: String::new(),
         }
     }
@@ -126,8 +122,6 @@ impl ActivityRow {
     pub fn to_csv_line(&self) -> String {
         let fields = [
             &self.ts,
-            &self.thread_id,
-            &self.session_id,
             &self.turn_id,
             &self.kind,
             &self.phase,
@@ -140,8 +134,6 @@ impl ActivityRow {
             &self.tokens_total,
             &self.context_used,
             &self.context_limit,
-            &self.account,
-            &self.cwd,
             &self.detail,
         ];
         let mut line = String::new();

@@ -610,6 +610,9 @@
             "browser_use_full_cdp_access": {
               "type": "boolean"
             },
+            "chat_message_metadata_passthrough": {
+              "type": "boolean"
+            },
             "chronicle": {
               "type": "boolean"
             },
@@ -5652,6 +5655,9 @@
           "type": "boolean"
         },
         "browser_use_full_cdp_access": {
+          "type": "boolean"
+        },
+        "chat_message_metadata_passthrough": {
           "type": "boolean"
         },
         "chronicle": {

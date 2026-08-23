@@ -211,6 +211,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     concurrent_reasoning_summaries_enabled: bool,
+    send_chat_message_metadata_passthrough: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
@@ -439,6 +440,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         concurrent_reasoning_summaries_enabled: bool,
+        send_chat_message_metadata_passthrough: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         http_client_factory: HttpClientFactory,
     ) -> Self {
@@ -462,6 +464,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 concurrent_reasoning_summaries_enabled,
+                send_chat_message_metadata_passthrough,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
@@ -875,13 +878,18 @@ impl ModelClient {
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         let is_openai = self.state.provider.info().is_openai();
-        if !is_openai {
+        // The passthrough is dropped for any provider that will not accept it:
+        // every non-OpenAI one, and an OpenAI endpoint that predates the field
+        // and rejects the whole request over it.
+        let send_passthrough = is_openai && self.state.send_chat_message_metadata_passthrough;
+        if !send_passthrough {
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
-                if let ResponseItem::FunctionCall {
-                    encrypted_function_args,
-                    ..
-                } = item
+                if !is_openai
+                    && let ResponseItem::FunctionCall {
+                        encrypted_function_args,
+                        ..
+                    } = item
                 {
                     *encrypted_function_args = None;
                 }

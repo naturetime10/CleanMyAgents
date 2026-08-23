@@ -5,3 +5,4 @@
 # Console build output
 /webui/node_modules/
 /webui/dist/
+.DS_Store

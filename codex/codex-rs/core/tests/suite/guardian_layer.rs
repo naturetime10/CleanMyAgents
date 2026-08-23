@@ -1,7 +1,7 @@
 //! End-to-end coverage for the guard layer wired into `codex-core`.
 //!
 //! These tests run a real session with the local-history guardian selected from
-//! config, then read the per-session CSV file it writes.
+//! config, then read the per-session CSV file and metadata sidecar it writes.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,6 +11,9 @@ use anyhow::Result;
 use codex_guardian::CSV_HEADER;
 use codex_guardian::GuardianConfig;
 use codex_guardian::GuardianMode;
+use codex_guardian::SESSION_META_VERSION;
+use codex_guardian::SessionMeta;
+use codex_guardian::read_session_metas;
 use core_test_support::fs_wait::wait_for_path_exists;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -24,11 +27,31 @@ use pretty_assertions::assert_eq;
 
 const WAIT: Duration = Duration::from_secs(10);
 
+fn debug_dir(codex_home: &Path) -> PathBuf {
+    codex_home.join("guardian").join("debug")
+}
+
 fn session_csv_path(codex_home: &Path, thread_id: &str) -> PathBuf {
-    codex_home
-        .join("guardian")
-        .join("debug")
-        .join(format!("{thread_id}.csv"))
+    debug_dir(codex_home).join(format!("{thread_id}.csv"))
+}
+
+/// Reads the sidecar for `thread_id` once the scan can see it.
+async fn read_meta(codex_home: &Path, thread_id: &str) -> Result<SessionMeta> {
+    let dir = debug_dir(codex_home);
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let found = read_session_metas(&dir)
+            .await?
+            .into_iter()
+            .find(|meta| meta.thread_id == thread_id);
+        match found {
+            Some(meta) => return Ok(meta),
+            None if tokio::time::Instant::now() >= deadline => {
+                anyhow::bail!("no session metadata for {thread_id} in {dir:?}")
+            }
+            None => tokio::time::sleep(Duration::from_millis(25)).await,
+        }
+    }
 }
 
 /// Reads the session file once it has at least `expected` activity rows.
@@ -46,8 +69,8 @@ async fn read_rows(path: &Path, expected: usize) -> Result<Vec<String>> {
 }
 
 fn kind_of(row: &str) -> &str {
-    // ts,thread_id,session_id,turn_id,kind,...
-    row.split(',').nth(4).unwrap_or_default()
+    // ts,turn_id,kind,...
+    row.split(',').nth(2).unwrap_or_default()
 }
 
 #[tokio::test]
@@ -104,11 +127,17 @@ async fn csv_history_records_session_prompt_and_token_activity() -> Result<()> {
         "token or context telemetry should be recorded: {kinds:?}"
     );
 
-    // Every recorded row carries the session correlation columns.
+    // Correlation lives in the sidecar, so no row repeats the thread id.
     let thread_id = test.session_configured.thread_id.to_string();
     assert!(
-        rows.iter().all(|row| row.contains(&thread_id)),
-        "every row should carry its thread id"
+        rows.iter().all(|row| !row.contains(&thread_id)),
+        "the thread id belongs to the sidecar, not to every row"
+    );
+    assert_eq!(
+        read_meta(test.codex_home_path(), &thread_id)
+            .await?
+            .thread_id,
+        thread_id
     );
 
     // The prompt text reaches the audit detail column.
@@ -122,7 +151,62 @@ async fn csv_history_records_session_prompt_and_token_activity() -> Result<()> {
 }
 
 #[tokio::test]
-async fn guarding_is_off_by_default_and_writes_nothing() -> Result<()> {
+async fn session_metadata_sidecar_identifies_the_history_file() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello back"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.guardian = GuardianConfig {
+            mode: GuardianMode::Csv,
+            ..GuardianConfig::default()
+        };
+    });
+    let test = builder.build(&server).await?;
+    let thread_id = test.session_configured.thread_id.to_string();
+
+    test.submit_turn("hello guardian").await?;
+    read_rows(
+        &session_csv_path(test.codex_home_path(), &thread_id),
+        /*expected*/ 4,
+    )
+    .await?;
+
+    let meta = read_meta(test.codex_home_path(), &thread_id).await?;
+    assert_eq!(meta.schema_version, SESSION_META_VERSION);
+    assert_eq!(meta.thread_id, thread_id);
+    assert_eq!(
+        meta.session_id,
+        test.session_configured.session_id.to_string()
+    );
+    assert_eq!(meta.csv_file, format!("{thread_id}.csv"));
+
+    // The model and originator are not columns in the history, so the sidecar
+    // is the only place a reader can recover them.
+    assert_eq!(meta.model, test.session_configured.model);
+    assert!(
+        !meta.originator.is_empty(),
+        "the sidecar should name the originator"
+    );
+    assert!(meta.rows > 0, "the sidecar should count the rows written");
+
+    Ok(())
+}
+
+/// Debug builds record without being configured to, so a developer running
+/// from source has a session trail. Tests are debug builds, which is why this
+/// asserts the recording default rather than the shipped one.
+#[tokio::test]
+async fn a_debug_build_records_history_without_being_configured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -139,13 +223,49 @@ async fn guarding_is_off_by_default_and_writes_nothing() -> Result<()> {
     let mut builder = test_codex();
     let test = builder.build(&server).await?;
 
-    assert_eq!(test.config.guardian.mode, GuardianMode::Off);
+    assert_eq!(test.config.guardian.mode, GuardianMode::Csv);
+
+    test.submit_turn("hello").await?;
+
+    let thread_id = test.session_configured.thread_id.to_string();
+    let rows = read_rows(
+        &session_csv_path(test.codex_home_path(), &thread_id),
+        /*expected*/ 1,
+    )
+    .await?;
+    assert!(!rows.is_empty(), "the default should record activity");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turning_the_mode_off_writes_nothing() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello back"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.guardian = GuardianConfig {
+            mode: GuardianMode::Off,
+            ..GuardianConfig::default()
+        };
+    });
+    let test = builder.build(&server).await?;
 
     test.submit_turn("hello").await?;
 
     assert!(
         !test.codex_home_path().join("guardian").exists(),
-        "the default configuration must not write a guardian directory"
+        "an explicitly disabled guard must not write a guardian directory"
     );
 
     Ok(())

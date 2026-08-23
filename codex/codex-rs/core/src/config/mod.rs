@@ -2412,12 +2412,15 @@ fn guardian_config(guardian: Option<GuardianToml>) -> GuardianConfig {
         return defaults;
     };
     GuardianConfig {
-        mode: match guardian.mode.unwrap_or_default() {
+        // An absent `mode` falls back to the build's default rather than to
+        // `GuardianModeToml`'s, whose derived default is baked into the
+        // published config schema and cannot vary by profile.
+        mode: guardian.mode.map_or(defaults.mode, |mode| match mode {
             GuardianModeToml::Off => GuardianMode::Off,
             GuardianModeToml::Csv => GuardianMode::Csv,
             GuardianModeToml::Ipc => GuardianMode::Ipc,
             GuardianModeToml::Both => GuardianMode::Both,
-        },
+        }),
         debug_dir: guardian.debug_dir.map(AbsolutePathBuf::into_path_buf),
         socket_path: guardian.socket_path.map(AbsolutePathBuf::into_path_buf),
         fail_closed: guardian.fail_closed.unwrap_or(defaults.fail_closed),

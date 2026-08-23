@@ -142,6 +142,11 @@ pub(crate) fn new_session_info(
     .with_yolo_mode(has_yolo_permissions(
         session.approval_policy,
         &session.permission_profile,
+    ))
+    .with_history_path(codex_guardian::configured_session_path(
+        &config.guardian,
+        config.codex_home.as_path(),
+        &session.thread_id.to_string(),
     ));
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
@@ -230,6 +235,9 @@ pub(crate) struct SessionHeaderHistoryCell {
     reasoning_effort: Option<ReasoningEffortConfig>,
     show_fast_status: bool,
     directory: PathBuf,
+    /// History file this session is writing, when the guard layer is
+    /// configured to keep one.
+    history_path: Option<PathBuf>,
     yolo_mode: bool,
 }
 
@@ -266,12 +274,18 @@ impl SessionHeaderHistoryCell {
             reasoning_effort,
             show_fast_status,
             directory,
+            history_path: None,
             yolo_mode: false,
         }
     }
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
         self.yolo_mode = yolo_mode;
+        self
+    }
+
+    pub(crate) fn with_history_path(mut self, history_path: Option<PathBuf>) -> Self {
+        self.history_path = history_path;
         self
     }
 
@@ -329,11 +343,14 @@ impl HistoryCell for SessionHeaderHistoryCell {
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
         const PERMISSIONS_LABEL: &str = "permissions:";
-        let label_width = if self.yolo_mode {
-            DIR_LABEL.len().max(PERMISSIONS_LABEL.len())
-        } else {
-            DIR_LABEL.len()
-        };
+        const HISTORY_LABEL: &str = "history:";
+        let mut label_width = DIR_LABEL.len();
+        if self.yolo_mode {
+            label_width = label_width.max(PERMISSIONS_LABEL.len());
+        }
+        if self.history_path.is_some() {
+            label_width = label_width.max(HISTORY_LABEL.len());
+        }
 
         let model_label = format!(
             "{model_label:<label_width$}",
@@ -374,6 +391,24 @@ impl HistoryCell for SessionHeaderHistoryCell {
             make_row(dir_spans),
         ];
 
+        if let Some(history_path) = self.history_path.as_deref() {
+            let history_label = format!("{HISTORY_LABEL:<label_width$}");
+            let history_prefix = format!("{history_label} ");
+            let history_max_width = inner_width.saturating_sub(display_width(&history_prefix));
+            // The file is named by thread id, so the full path never fits the
+            // box and would truncate down to `~/.../<uuid>.csv` -- keeping the
+            // one part a reader cannot act on and dropping the one they can.
+            // The directory fits, and `raw_lines` still carries the full path.
+            let history_dir = history_path.parent().unwrap_or(history_path);
+            lines.push(make_row(vec![
+                Span::from(history_prefix).dim(),
+                Span::from(Self::format_directory_inner(
+                    history_dir,
+                    Some(history_max_width),
+                )),
+            ]));
+        }
+
         if self.yolo_mode {
             let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
             lines.push(make_row(vec![
@@ -404,6 +439,12 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 self.format_directory(/*max_width*/ None)
             )),
         ];
+        if let Some(history_path) = self.history_path.as_deref() {
+            lines.push(Line::from(format!(
+                "history: {}",
+                Self::format_directory_inner(history_path, /*max_width*/ None)
+            )));
+        }
         if self.yolo_mode {
             lines.push(Line::from("permissions: YOLO mode"));
         }
