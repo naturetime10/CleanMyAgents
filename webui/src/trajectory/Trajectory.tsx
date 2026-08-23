@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { KIND_LABEL, laneOf, LANES, sessionEnd, tabsFor, totals,
          type Kind } from "./model";
-import { mockSession } from "./mock";
+import { realNotes, realSession } from "./real-session";
 import {
   AGENT_COUNT, KIND_LABEL as NOTE_KIND, YOU, annotate, byRow, userNote, worst,
   type Annotation,
@@ -17,8 +17,24 @@ import "./trajectory.css";
 
 const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-/** Narrowest a marked band may be, as a fraction of the track. */
+/**
+ * Narrowest a marked band may be, as a fraction of the track.
+ *
+ * Only needed with a real clock, where an instant event has no width at all.
+ * In index mode every step owns an equal slot, so a floor there would make
+ * bands wider than the blocks they mark.
+ */
 const BAND_MIN = 0.006;
+
+/**
+ * Share of its slot a block fills in index mode; the rest is the gap.
+ *
+ * This was a fixed 0.002 subtracted from the slot, which is fine at thirty
+ * records and negative past five hundred: 1/600 is 0.00167, so every block
+ * came out narrower than nothing and rendered as a dot. A proportion cannot
+ * do that.
+ */
+const SLOT_FILL = 0.72;
 const fmtMs = (ms: number) =>
   ms >= 60_000 ? `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
   : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}s`
@@ -101,14 +117,20 @@ function NoteCard({ notes, at, blocked, onBlock, onHold, onLeave }: {
 }
 
 export default function Trajectory() {
-  const session = useMemo(() => mockSession(), []);
+  const session = realSession;
   const end = useMemo(() => sessionEnd(session), [session]);
   const sums = useMemo(() => totals(session), [session]);
 
   /** Marks the user added by hand, merged with the agents'. */
   const [mine, setMine] = useState<Annotation[]>([]);
+  /**
+   * Annotations shipped with the session, plus anything the local rules find in
+   * it, plus the reader's own. The converter already ran the rules over the
+   * full file; `annotate` is kept so a session that arrives without them is
+   * still marked up.
+   */
   const notes = useMemo(
-    () => byRow([...annotate(session.records), ...mine]),
+    () => byRow([...realNotes, ...annotate(session.records), ...mine]),
     [session, mine],
   );
   /** A range picked with shift-click, waiting to be marked. */
@@ -121,7 +143,19 @@ export default function Trajectory() {
    * strip becomes a scrollable timeline, which is the only way individual
    * steps stay distinguishable in a long session.
    */
-  const [zoom, setZoom] = useState(1);
+  /**
+   * Starts zoomed in rather than fitting the session.
+   *
+   * 600 steps across 1400px is two pixels each: a picture of "a lot happened",
+   * which the ledger already says. Showing a slice and letting it be scrolled
+   * is the difference between a summary and a timeline.
+   */
+  const FIT_RECORDS = 150;
+  const [zoom, setZoom] = useState(() =>
+    Math.max(1, Math.min(12, session.records.length / FIT_RECORDS)));
+
+  /** Drag across the strip to pick a range to magnify, as in a metrics chart. */
+  const [brush, setBrush] = useState<{ from: number; to: number } | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   /** Fraction of the session currently visible in the ledger, for the marker. */
   const [view, setView] = useState({ from: 0, to: 1 });
@@ -158,20 +192,64 @@ export default function Trajectory() {
   };
   const holdCard = () => clearTimeout(closeTimer.current);
 
-  /** Click-drag anywhere on the strip pans it; no scrollbar to aim at. */
-  const startPan = (e: React.MouseEvent) => {
+  /**
+   * Drag selects a range and magnifies it; hold a modifier to pan instead.
+   *
+   * Selecting is the more common intent on a dense strip — panning is what the
+   * wheel is for, and what you do once you are already close in.
+   */
+  const startDrag = (e: React.MouseEvent) => {
     const el = trackRef.current;
-    if (!el || el.scrollWidth <= el.clientWidth) return;
-    const x0 = e.clientX, s0 = el.scrollLeft;
-    const move = (ev: MouseEvent) => { el.scrollLeft = s0 - (ev.clientX - x0); };
+    if (!el) return;
+
+    if (e.altKey || e.shiftKey || e.button === 1) {
+      if (el.scrollWidth <= el.clientWidth) return;
+      const x0 = e.clientX, s0 = el.scrollLeft;
+      const move = (ev: MouseEvent) => { el.scrollLeft = s0 - (ev.clientX - x0); };
+      const up = () => {
+        removeEventListener("mousemove", move);
+        removeEventListener("mouseup", up);
+        document.body.style.cursor = "";
+      };
+      addEventListener("mousemove", move);
+      addEventListener("mouseup", up);
+      document.body.style.cursor = "grabbing";
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    const at = (clientX: number) => clientX - rect.left + el.scrollLeft;
+    const a = at(e.clientX);
+    let b = a;
+    setBrush({ from: a, to: a });
+
+    const move = (ev: MouseEvent) => {
+      b = at(ev.clientX);
+      setBrush({ from: Math.min(a, b), to: Math.max(a, b) });
+    };
     const up = () => {
       removeEventListener("mousemove", move);
       removeEventListener("mouseup", up);
-      document.body.style.cursor = "";
+      setBrush(null);
+      const lo = Math.min(a, b), hi = Math.max(a, b);
+      // A stray click is not a selection; below this it is a click on a block.
+      if (hi - lo < 6) return;
+      const full = el.scrollWidth;
+      // The selection should end up filling the viewport, so the new zoom is
+      // the old one scaled by how much narrower the selection is than the
+      // viewport. Dividing by the selection's share of the *content* instead
+      // multiplies by zoom a second time, and every drag pinned the maximum.
+      const next = Math.max(1, Math.min(60, (zoom * el.clientWidth) / (hi - lo)));
+      const centre = ((lo + hi) / 2) / full;
+      setZoom(next);
+      // Layout has to settle at the new width before scrollLeft means anything.
+      // The inner layer is `next × 100%`, so that is the new scrollable width.
+      requestAnimationFrame(() => {
+        el.scrollLeft = centre * el.clientWidth * next - el.clientWidth / 2;
+      });
     };
     addEventListener("mousemove", move);
     addEventListener("mouseup", up);
-    document.body.style.cursor = "grabbing";
   };
 
   const [selected, setSelected] = useState<string | null>(
@@ -198,7 +276,17 @@ export default function Trajectory() {
     track.scrollLeft = centre - track.clientWidth / 2;
     requestAnimationFrame(() => { syncing.current = false; });
   };
-  const [actualDuration, setActualDuration] = useState(true);
+  /**
+   * Duration only means something when the timestamps do.
+   *
+   * A rollout does not always carry a usable clock: this one writes 52,000
+   * records inside five seconds, because the stamps mark when the file was
+   * written rather than when each step ran. Drawing widths from that is not an
+   * approximation, it is invention, so the view starts on equal widths and the
+   * control says why it is unavailable.
+   */
+  const hasClock = realSession.clock === "wall";
+  const [actualDuration, setActualDuration] = useState(hasClock);
   const [foldTurns, setFoldTurns] = useState(false);
   const [foldCalls, setFoldCalls] = useState(false);
 
@@ -231,8 +319,10 @@ export default function Trajectory() {
     <div className="tj">
       <>
           <div className="tj-bar" role="toolbar" aria-label="Trajectory">
-            <button type="button" aria-pressed={actualDuration}
-                    title={actualDuration ? "Use equal-width blocks" : "Use recorded duration"}
+            <button type="button" aria-pressed={actualDuration} disabled={!hasClock}
+                    title={!hasClock
+                      ? "This rollout has no usable clock — its records were written in one burst"
+                      : actualDuration ? "Use equal-width blocks" : "Use recorded duration"}
                     onClick={() => setActualDuration((v) => !v)}>
               <Icon d={P.clock} />Duration
             </button>
@@ -252,7 +342,7 @@ export default function Trajectory() {
               className="tj-track"
               ref={trackRef}
               data-pannable={zoom > 1 || undefined}
-              onMouseDown={startPan}
+              onMouseDown={startDrag}
               onWheel={(e) => {
                 // Modifier zooms, plain wheel pans. A bare wheel that zoomed
                 // would fight the page scroll on the way past.
@@ -264,6 +354,11 @@ export default function Trajectory() {
               }}
             >
               <div className="tj-track-in" style={{ width: `${zoom * 100}%` }}>
+                {brush && (
+                  <div className="tj-brush" style={{
+                    left: brush.from, width: Math.max(1, brush.to - brush.from),
+                  }} />
+                )}
                 <div className="tj-view" style={{
                   "--from": `${view.from * 100}%`,
                   "--to": `${(1 - view.to) * 100}%`,
@@ -278,10 +373,11 @@ export default function Trajectory() {
                 const x = actualDuration ? r.startedAt / end : i / session.records.length;
                 const w = actualDuration
                   ? Math.max(r.durationMs / end, 0.004)
-                  : 1 / session.records.length - 0.002;
-                // A zero-duration hook computes to no width, so the band gets a
+                  : (1 / session.records.length) * SLOT_FILL;
+                // A zero-duration step has no width to mark, so the band gets a
                 // floor — grown symmetrically, then clamped inside the track.
-                const bw = Math.max(w, BAND_MIN);
+                // Index mode needs none: every slot is already the same size.
+                const bw = actualDuration ? Math.max(w, BAND_MIN) : w;
                 const bx = Math.max(0, Math.min(x - (bw - w) / 2, 1 - bw));
                 return (
                   <div
@@ -297,7 +393,7 @@ export default function Trajectory() {
                 const x = actualDuration ? r.startedAt / end : i / session.records.length;
                 const w = actualDuration
                   ? Math.max(r.durationMs / end, 0.004)
-                  : 1 / session.records.length - 0.002;
+                  : (1 / session.records.length) * SLOT_FILL;
                 return (
                   <button
                     key={r.id}
@@ -331,7 +427,8 @@ export default function Trajectory() {
               </div>
             </div>
             {zoom > 1 && (
-              <button className="tj-zoom" onClick={() => setZoom(1)} title="Fit the whole session">
+              <button className="tj-zoom" onClick={() => setZoom(1)}
+                      title="Drag to magnify a range · alt-drag to pan · click to fit the session">
                 {zoom.toFixed(1)}×
               </button>
             )}
@@ -530,14 +627,16 @@ export default function Trajectory() {
           </div>
 
           <div className="tj-status">
-            <span>{sums.turns} turns · {sums.steps} steps</span><i>|</i>
-            <span>LLM {fmtMs(sums.llmMs)} · Tool call {fmtMs(sums.toolMs)}</span><i>|</i>
+            <span>{sums.turns} turns · {sums.steps} of {realSession.totalRecords.toLocaleString()} steps</span><i>|</i>
+            {hasClock
+              ? <><span>LLM {fmtMs(sums.llmMs)} · Tool call {fmtMs(sums.toolMs)}</span><i>|</i></>
+              : <><span title="Rollout timestamps are write times, not step times">no timing in this rollout</span><i>|</i></>}
             <span>TTFT avg 3.6s · 36 tok/s</span><i>|</i>
             <span>Cache hit 93%</span><i>|</i>
             <span>Input {fmtTok(sums.inputTokens)} tok · Output {fmtTok(sums.outputTokens)}</span><i>|</i>
             <span className="hot">Hooks injected {fmtTok(sums.hookTokens)} tok</span><i>|</i>
             {/* Says where the marks came from, and that several readers agreed. */}
-            <span>{AGENT_COUNT} agents · {notes.size} rows marked
+            <span title={realSession.source}>{AGENT_COUNT} agents · {notes.size} rows marked
               {blocked.size ? ` · ${blocked.size} blocked` : ""}</span>
           </div>
       </>

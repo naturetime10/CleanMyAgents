@@ -349,3 +349,18 @@
   padding: 2px 7px; font: 500 10.5px var(--mono); color: var(--ink2); cursor: pointer;
 }
 .tj-zoom:hover { color: var(--ink); background: #fafaf9; }
+
+/* A control that cannot do anything should look like it. */
+.tj-bar button:disabled { opacity: 0.4; cursor: default; }
+.tj-bar button:disabled:hover { background: none; }
+
+/* The dragged range, drawn while the mouse is down. Dashed, because it is a
+   proposal rather than a state — it disappears the moment it is applied. */
+.tj-brush {
+  position: absolute; top: 0; bottom: 0; z-index: 4; pointer-events: none;
+  background: rgba(22, 24, 29, 0.07);
+  border-left: 1px dashed rgba(22, 24, 29, 0.55);
+  border-right: 1px dashed rgba(22, 24, 29, 0.55);
+}
+.tj-track { cursor: crosshair; }
+.tj-track[data-pannable] { cursor: crosshair; }
