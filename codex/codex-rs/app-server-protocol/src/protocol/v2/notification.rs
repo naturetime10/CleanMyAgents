@@ -1,4 +1,5 @@
 use super::TurnError;
+use codex_protocol::protocol::GuardianDecision;
 use crate::JsonSchema;
 use crate::RequestId;
 use crate::TS;
@@ -33,6 +34,22 @@ pub struct GuardianWarningNotification {
     pub thread_id: String,
     /// Concise guardian warning message for the user.
     pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianVerdictNotification {
+    /// Thread target for the guard decision.
+    pub thread_id: String,
+    /// What the guard decided.
+    pub decision: GuardianDecision,
+    /// What was reviewed, in the user's words: `prompt`, `tool call`, ...
+    pub action: String,
+    /// Tool or MCP server the action is about, when it has one.
+    pub tool: Option<String>,
+    /// The guard's justification, when it gave one.
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

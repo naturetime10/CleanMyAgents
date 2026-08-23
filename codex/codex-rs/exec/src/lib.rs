@@ -1432,6 +1432,7 @@ fn should_process_notification(
                     .as_deref()
                     .is_none_or(|candidate| candidate == turn_id)
         }
+        ServerNotification::GuardianVerdict(notification) => notification.thread_id == thread_id,
         ServerNotification::ItemCompleted(notification) => {
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }

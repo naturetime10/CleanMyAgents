@@ -2,10 +2,12 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::GuardianVerdictNotification;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_protocol::protocol::GuardianDecision;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
@@ -205,6 +207,31 @@ impl EventProcessorWithHumanOutput {
             _ => {}
         }
     }
+    /// Prints one guard decision, coloured the way the TUI colours it: a denial
+    /// or a rewrite changed what ran, an allow only confirms the guard was
+    /// consulted.
+    fn process_guardian_verdict(&mut self, notification: GuardianVerdictNotification) -> CodexStatus {
+        let (label, style) = match notification.decision {
+            GuardianDecision::Allowed => ("allowed", self.green),
+            GuardianDecision::Denied => ("denied", self.red),
+            GuardianDecision::Rewrote => ("rewrote", self.yellow),
+        };
+        let tool = notification
+            .tool
+            .map(|tool| format!(" {}", tool.style(self.cyan)))
+            .unwrap_or_default();
+        eprintln!(
+            "{} {} {}{}",
+            "guardian:".style(self.dimmed),
+            label.style(style).style(self.bold),
+            notification.action,
+            tool
+        );
+        if let Some(reason) = notification.reason {
+            eprintln!("  {}", reason.style(self.dimmed));
+        }
+        CodexStatus::Running
+    }
 }
 
 impl EventProcessor for EventProcessorWithHumanOutput {
@@ -239,6 +266,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 CodexStatus::Running
             }
             ServerNotification::Warning(notification) => self.process_warning(notification.message),
+            ServerNotification::GuardianVerdict(notification) => {
+                self.process_guardian_verdict(notification)
+            }
             ServerNotification::Error(notification) => {
                 eprintln!(
                     "{} {}",

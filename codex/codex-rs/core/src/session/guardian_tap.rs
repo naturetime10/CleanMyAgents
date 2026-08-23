@@ -14,6 +14,9 @@ use codex_guardian::Activity;
 use codex_guardian::ActivityContext;
 use codex_guardian::GuardedAction;
 use codex_guardian::Verdict;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianDecision;
+use codex_protocol::protocol::GuardianVerdictEvent;
 
 use crate::session::Session;
 use crate::session::TurnContext;
@@ -59,12 +62,50 @@ pub(crate) async fn review(
         return Verdict::Defer;
     }
     let ctx = activity_context(sess, turn_context);
-    match guardian.review(&ctx, &action).await {
+    let verdict = match guardian.review(&ctx, &action).await {
         Ok(verdict) => verdict,
         Err(err) => {
             tracing::warn!("guardian review failed: {err}");
             Verdict::on_error(&err, guardian.failure_posture())
         }
+    };
+    if let Some(event) = verdict_event(&action, &verdict) {
+        sess.send_event(turn_context, EventMsg::GuardianVerdict(event))
+            .await;
+    }
+    verdict
+}
+
+/// Describes one decided verdict for the UI.
+///
+/// Only the guard's own decisions are announced. [`Verdict::Defer`] is the
+/// no-opinion default -- it is also what a disabled or fail-open guardian
+/// yields -- so reporting it would put a line under every action in a session
+/// that is not being guarded at all.
+fn verdict_event(action: &GuardedAction, verdict: &Verdict) -> Option<GuardianVerdictEvent> {
+    let decision = match verdict {
+        Verdict::Allow => GuardianDecision::Allowed,
+        Verdict::Deny { .. } => GuardianDecision::Denied,
+        Verdict::Rewrite { .. } => GuardianDecision::Rewrote,
+        Verdict::Defer => return None,
+    };
+    Some(GuardianVerdictEvent {
+        decision,
+        action: action_label(action).to_string(),
+        tool: action.tool().map(str::to_string),
+        reason: verdict.reason().map(str::to_string),
+    })
+}
+
+/// The wire label of a guarded action, said the way a user would say it.
+fn action_label(action: &GuardedAction) -> &'static str {
+    match action {
+        GuardedAction::Prompt { .. } => "prompt",
+        GuardedAction::ToolCall { .. } => "tool call",
+        GuardedAction::ToolOutput { .. } => "tool output",
+        GuardedAction::Approval { .. } => "approval",
+        GuardedAction::McpAdmission { .. } => "MCP server",
+        GuardedAction::Compaction { .. } => "compaction",
     }
 }
 

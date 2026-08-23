@@ -11,3 +11,6 @@
 /desktop/dist/
 
 .DS_Store
+
+# guardian stub request log
+codex/codex-rs/guardian/stub/stub.jsonl

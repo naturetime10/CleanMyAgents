@@ -4,6 +4,7 @@
 //! and final-message separator handling.
 
 use super::*;
+use codex_app_server_protocol::GuardianVerdictNotification;
 
 const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "Invalid prompt: we've limited access to this content for safety reasons.";
@@ -488,6 +489,16 @@ impl ChatWidget {
             return;
         }
         self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
+    }
+
+    pub(super) fn on_guardian_verdict(&mut self, notification: GuardianVerdictNotification) {
+        self.add_to_history(history_cell::new_guardian_verdict_event(
+            notification.decision,
+            notification.action,
+            notification.tool,
+            notification.reason,
+        ));
         self.request_redraw();
     }
 
