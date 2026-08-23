@@ -534,6 +534,15 @@ export default function Trajectory() {
                           onMouseLeave={() => notes.has(r.id) && closeCard()}
                           data-picked={picked.includes(r.id) || undefined}
                           onClick={(e) => {
+                            if (e.metaKey || e.ctrlKey) {
+                              // Cmd toggles one row in or out of the pick,
+                              // Finder-style; works on top of shift and Select N.
+                              setPicked((p) => p.includes(r.id)
+                                ? p.filter((id) => id !== r.id)
+                                : [...p, r.id]);
+                              setSelected(r.id); // stays the anchor for a later shift
+                              return;
+                            }
                             if (e.shiftKey && selected) {
                               // Shift extends from the anchor through this row,
                               // in the order the ledger is currently showing.
