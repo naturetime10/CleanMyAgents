@@ -1,4 +1,7 @@
 # Vendored upstream repos — cloned independently, not tracked here
 /backend/
 /desktop/
-/webui/
+
+# Console build output
+/webui/node_modules/
+/webui/dist/
