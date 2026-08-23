@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-select: none; cursor: default; }
+  html, body { height: 100%; }
+  body {
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #fff;
+    background: linear-gradient(160deg, #3b2a63 0%, #2a1e4f 45%, #221743 100%);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .wrap { flex: 1; padding: 16px 16px 0; overflow-y: auto; }
+  h1 { font-size: 20px; font-weight: 700; }
+  h1 .status { color: #57e3ff; }
+  h1 .status.warn { color: #ffc84a; }
+  .sub { color: #b6a9d9; font-size: 12px; margin-bottom: 12px; }
+  .card { background: rgba(255,255,255,.07); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+  .protect { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+  .protect .ok { margin-left: auto; font-weight: 500; font-size: 12px; }
+  .shield { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center;
+            background: #2ecc5e; font-size: 12px; flex: none; }
+  .shield.warn { background: #e6a23c; }
+  .h2 { font-weight: 650; font-size: 13.5px; margin-bottom: 8px; display: flex; }
+  .h2 .action { margin-left: auto; color: #57b8ff; font-weight: 600; cursor: pointer; }
+  .row { display: flex; gap: 10px; margin-bottom: 10px; }
+  .row .card { flex: 1; margin: 0; }
+  /* gauge */
+  .gauge { display: grid; place-items: center; position: relative; }
+  .gauge .num { position: absolute; text-align: center; }
+  .gauge .num b { font-size: 20px; font-weight: 700; display: block; }
+  .gauge .num span { font-size: 10.5px; color: #b6a9d9; }
+  .gauge-cap { text-align: center; color: #b6a9d9; font-size: 11px; margin-top: 6px; }
+  /* lanes */
+  .lane { display: grid; grid-template-columns: 92px 1fr 40px; gap: 8px; align-items: center;
+          height: 20px; }
+  .lane .name { font-size: 11.5px; color: #e6def7; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; }
+  .lane .track { display: block; height: 8px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; }
+  .lane .bar { display: block; height: 100%; border-radius: 4px; min-width: 3px; }
+  .lane .v { font-size: 10.5px; color: #b6a9d9; text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 14px; margin-top: 8px; font-size: 11px; color: #b6a9d9; }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .rec { display: flex; align-items: center; gap: 10px; }
+  .rec .body { font-size: 12px; color: #cfc4e8; flex: 1; }
+  .rec .body b { color: #fff; }
+  .rec .btn { padding: 6px 12px; background: rgba(255,255,255,.14); border-radius: 8px;
+              font-weight: 600; font-size: 12.5px; cursor: pointer; flex: none; }
+  .rec .btn:active { background: rgba(255,255,255,.25); }
+  footer { flex: none; display: flex; align-items: center; padding: 10px 14px; background: rgba(0,0,0,.18); }
+  footer .open { flex: 1; text-align: center; font-weight: 600; font-size: 14px; cursor: pointer; }
+  footer .open:active { opacity: .7; }
+  .empty { color: #b6a9d9; padding: 8px 2px; }
+</style>
+</head>
+<body>
+  <div class="wrap" id="wrap"><div class="empty">Connecting…</div></div>
+  <footer><span class="open" onclick="window.open('http://127.0.0.1:4490/')">Open CleanMyAgent</span></footer>
+<script>
+// palette validated for dark surface #2a1e4f (dataviz six-checks): cyan=active, amber=wasted
+const ACTIVE = "#1697b8", WASTED = "#bd8228";
+const fmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+
+function gauge(frac, label) {
+  const r = 34, c = 2 * Math.PI * r, deg = Math.max(0.02, Math.min(frac, 1));
+  return `<div class="gauge">
+    <svg width="88" height="88" viewBox="0 0 88 88">
+      <circle cx="44" cy="44" r="${r}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="9"/>
+      <circle cx="44" cy="44" r="${r}" fill="none" stroke="${WASTED}" stroke-width="9"
+        stroke-linecap="round" stroke-dasharray="${c * deg} ${c}" transform="rotate(-90 44 44)"/>
+    </svg>
+    <div class="num"><b>${Math.round(frac * 100)}%</b><span>${label}</span></div>
+  </div>`;
+}
+
+function render(s) {
+  const findings = s.audit?.findings?.length ?? 0;
+  const untrusted = s.hooks.filter(h => h.trustStatus !== "trusted").length;
+  const healthy = findings === 0 && untrusted === 0;
+  const total = s.budget?.totalTokens ?? 0;
+  const wasted = s.budget?.wastedTokens ?? 0;
+  const rec = (s.recommendations ?? [])[0];
+  const per = (s.budget?.perServer ?? []).filter(r => r.enabled && r.tokens > 0)
+    .sort((a, b) => b.tokens - a.tokens);
+  const max = per[0]?.tokens || 1;
+
+  document.getElementById("wrap").innerHTML = `
+    <h1>Agent Health: <span class="status ${healthy ? "" : "warn"}">${healthy ? "Good" : "Attention"}</span></h1>
+    <div class="sub">Codex harness · ${s.stats.sessions} sessions</div>
+
+    <div class="card">
+      <div class="protect">
+        <span class="shield ${healthy ? "" : "warn"}">${healthy ? "✓" : "!"}</span>
+        Hook audit — ${s.hooks.length} watched
+        <span class="ok">${healthy ? "✓ Protected" : `${findings} findings · ${untrusted} untrusted`}</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="flex:0 0 132px">
+        ${gauge(total ? wasted / total : 0, "wasted")}
+        <div class="gauge-cap">Context · ${fmt(total)} tok</div>
+      </div>
+      <div class="card">
+        <div class="h2">MCP channels <span class="action" onclick="window.open('http://127.0.0.1:4490/')">Free Up</span></div>
+        ${per.map(r => `
+          <div class="lane" title="${r.server}: ${r.tokens.toLocaleString()} tokens, ${r.calls} calls">
+            <span class="name">${r.server}</span>
+            <span class="track"><span class="bar" style="width:${Math.round(r.tokens / max * 100)}%;
+              background:${r.calls > 0 ? ACTIVE : WASTED}"></span></span>
+            <span class="v">${fmt(r.tokens)}</span>
+          </div>`).join("")}
+        <div class="legend">
+          <span><i style="background:${ACTIVE}"></i>Active</span>
+          <span><i style="background:${WASTED}"></i>Unused</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card rec">${rec ? `
+      <div class="body"><b>Disable ${rec.server}</b> — ${rec.reason}, saves ${fmt(rec.savesTokens)} tok</div>
+      <span class="btn" onclick="window.open('http://127.0.0.1:4490/')">Review</span>` : `
+      <div class="body">Nothing to clean up right now.</div>`}
+    </div>`;
+}
+</script>
+</body>
+</html>
