@@ -56,6 +56,8 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
                 Feature::DeferredExecutor,
                 Feature::MultiAgentV2,
                 Feature::TokenBudget,
+                // Off by default, so the on-path has to ask for it.
+                Feature::ChatMessageMetadataPassthrough,
             ] {
                 config
                     .features
