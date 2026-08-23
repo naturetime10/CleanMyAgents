@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createEquile } from "@nodus-ai/equile";
 import { createRubbishStore } from "./similarity.js";
+import { createSessionStore } from "./store.js";
 
 const API_PORT = 4488;   // ops sidecar (data API)
 const APP_PORT = 4490;   // webui/dist + API proxy, same-origin like prod (4499 is vite dev's)
@@ -56,6 +57,7 @@ function handleEvents(req, res, url) {
         if (ev.status === "blocked" || ev.blocked || ev.decision === "deny" || ev.verdict === "deny") {
           blockedIndex.add(String(ev.text ?? JSON.stringify(ev.action ?? ev.activity ?? "")));
         }
+        if (threadOf(ev)) sessions.append(threadOf(ev), ev); // keyed feeds get the per-thread copy
         res.end(JSON.stringify({ ok: true, count: events.length }));
       } catch { res.statusCode = 400; res.end(JSON.stringify({ ok: false, error: "invalid JSON" })); }
     });
@@ -93,6 +95,10 @@ let rubbish;
 // island, by a saved rule, or reported blocked by the feed. A new call that
 // looks like one of these gets a human review, not a pass.
 let blockedIndex;
+// per-thread JSONL under userData/sessions — the analysable record of
+// everything codex reported, keyed the way codex keys it
+let sessions;
+const threadOf = (x) => x?.context?.thread_id ?? x?.ctx?.thread_id ?? x?.thread_id;
 
 function handleRubbish(req, res) {
   res.setHeader("content-type", "application/json");
@@ -229,9 +235,15 @@ function handleReviewPost(req, res) {
     if (past) hits.push("similar-to-blocked");
     events.push({ kind: "review", tool, hits, receivedAt: new Date().toISOString() });
     appendFileSync(eventsFile, JSON.stringify(events[events.length - 1]) + "\n");
+    // reviews land in the same per-thread file, verdict stamped when decided
+    const logReview = (verdict, decidedBy) => sessions.append(threadOf(body), {
+      kind: "review", review_id: id, ...body, hits, verdict, decidedBy,
+      receivedAt: new Date().toISOString(),
+    });
 
     if (hits.length === 0) {
       reviews.set(id, { status: "decided", verdict: verdictFor(true) });
+      logReview(verdictFor(true), "clean");
       return respondReview(res, id);
     }
     const ruleKey = `${tool}|${hits.join(",")}`;
@@ -239,6 +251,7 @@ function handleReviewPost(req, res) {
     if (saved) {
       if (saved === "deny") blockedIndex.add(text);
       reviews.set(id, { status: "decided", verdict: verdictFor(saved === "allow") });
+      logReview(verdictFor(saved === "allow"), `rule-${saved}`);
       return respondReview(res, id);
     }
     reviews.set(id, { status: "pending" });
@@ -249,7 +262,11 @@ function handleReviewPost(req, res) {
       { tool, text, hits,
         match: near && { sim: Math.round(near.sim * 100), text: near.text,
                          kind: near === past ? "blocked" : "rubbish" } },
-      { end: (out) => reviews.set(id, { status: "decided", verdict: verdictFor(JSON.parse(out).allow) }) },
+      { end: (out) => {
+          const allow = JSON.parse(out).allow;
+          reviews.set(id, { status: "decided", verdict: verdictFor(allow) });
+          logReview(verdictFor(allow), "island");
+        } },
       ruleKey);
     respondReview(res, id); // 202 — ApiGuardian polls the Location
   });
@@ -269,6 +286,7 @@ function handleActivities(req, res) {
       const ev = { kind: "activity", ...item, receivedAt: new Date().toISOString() };
       events.push(ev);
       appendFileSync(eventsFile, JSON.stringify(ev) + "\n");
+      sessions.append(threadOf(item), ev); // the per-thread copy analysis reads
     }
     res.end(JSON.stringify({ ok: true, count: items.length }));
   });
@@ -392,6 +410,16 @@ function serveApp() {
       return respondReview(res, path.slice("/v1/reviews/".length));
     }
     if (path === "/v1/activities" && req.method === "POST") return handleActivities(req, res);
+    if (path === "/sessions") {
+      res.setHeader("content-type", "application/json");
+      return res.end(JSON.stringify(sessions.list()));
+    }
+    if (path.startsWith("/sessions/")) {
+      res.setHeader("content-type", "application/json");
+      const entries = sessions.read(decodeURIComponent(path.slice("/sessions/".length)));
+      if (!entries) { res.statusCode = 404; return res.end('{"title":"unknown session"}'); }
+      return res.end(JSON.stringify(entries));
+    }
     if (path === "/decision" && req.method === "POST") return handleDecision(req, res);
     if (path === "/deep-scan" && req.method === "POST") return handleDeepScan(req, res);
     if (path === "/island") {
@@ -453,6 +481,7 @@ app.whenReady().then(() => {
   loadRules();
   rubbish = createRubbishStore(join(app.getPath("userData"), "rubbish.json"));
   blockedIndex = createRubbishStore(join(app.getPath("userData"), "blocked.json"));
+  sessions = createSessionStore(join(app.getPath("userData"), "sessions"));
   serveApp();
 
   win = new BrowserWindow({
