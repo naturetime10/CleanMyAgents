@@ -24,6 +24,12 @@ pub const DEBUG_DIR: &str = "debug";
 /// Default rendezvous path for the resident guardian process.
 pub const SOCKET_FILE: &str = "guardian.sock";
 
+/// Where [`GuardianMode::Api`] looks for a backend when config names none.
+///
+/// Loopback on purpose: the default must not send a session's prompts and tool
+/// output anywhere but this machine.
+pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4500/guardian";
+
 /// Which guardian implementation a session runs with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,16 +47,13 @@ pub enum GuardianMode {
 }
 
 impl Default for GuardianMode {
-    /// Debug builds record local history without being asked, so a developer
-    /// running from source has a session trail to read after the fact. Release
-    /// builds stay off: recording every prompt and tool result to disk is not
-    /// something a shipped binary should start doing on its own.
+    /// Delegate to the local REST backend without being asked.
+    ///
+    /// The default points at [`DEFAULT_ENDPOINT`], a loopback address, so a
+    /// session picks up the monitor as soon as one is running and needs no
+    /// configuration to do it.
     fn default() -> Self {
-        if cfg!(debug_assertions) {
-            Self::Csv
-        } else {
-            Self::Off
-        }
+        Self::Api
     }
 }
 
@@ -82,7 +85,7 @@ impl Default for GuardianConfig {
             mode: GuardianMode::default(),
             debug_dir: None,
             socket_path: None,
-            endpoint: None,
+            endpoint: Some(DEFAULT_ENDPOINT.to_string()),
             api_key_env: None,
             fail_closed: true,
             request_timeout: Duration::from_secs(3),
@@ -312,7 +315,15 @@ mod tests {
         assert_eq!(api(Some("https://guardian.example/api")).validate(), Ok(()));
 
         // Every other mode ignores the field entirely.
-        assert_eq!(GuardianConfig::default().validate(), Ok(()));
+        assert_eq!(
+            GuardianConfig {
+                mode: GuardianMode::Csv,
+                endpoint: None,
+                ..GuardianConfig::default()
+            }
+            .validate(),
+            Ok(())
+        );
     }
 
     /// An unbuildable REST guardian must not masquerade as a working one.
@@ -320,6 +331,7 @@ mod tests {
     async fn api_mode_without_an_endpoint_falls_back_to_no_guarding() {
         let config = GuardianConfig {
             mode: GuardianMode::Api,
+            endpoint: None,
             ..GuardianConfig::default()
         };
         let guardian = guardian_from_config(&config, Path::new("/codex-home"), &test_factory());
@@ -354,15 +366,30 @@ mod tests {
         );
     }
 
-    #[cfg(debug_assertions)]
+    /// The out-of-the-box configuration has to be one that works: a mode with
+    /// somewhere to send to, an endpoint that stays on this machine, and a
+    /// posture that does not admit an action nobody vetted.
     #[test]
-    fn a_debug_build_records_local_history_by_default() {
-        assert_eq!(GuardianConfig::default().mode, GuardianMode::Csv);
-    }
+    fn the_default_delegates_to_the_local_backend() {
+        let defaults = GuardianConfig::default();
+        assert_eq!(defaults.mode, GuardianMode::Api);
+        assert_eq!(defaults.endpoint.as_deref(), Some(DEFAULT_ENDPOINT));
+        assert!(defaults.fail_closed);
+        assert_eq!(defaults.validate(), Ok(()));
 
-    #[cfg(not(debug_assertions))]
-    #[test]
-    fn a_release_build_stays_off_by_default() {
-        assert_eq!(GuardianConfig::default().mode, GuardianMode::Off);
+        let endpoint = ApiEndpoint::parse(DEFAULT_ENDPOINT).expect("default endpoint parses");
+        assert_eq!(
+            endpoint.reviews().as_str(),
+            "http://127.0.0.1:4500/guardian/v1/reviews"
+        );
+        assert_eq!(
+            endpoint.activities().as_str(),
+            "http://127.0.0.1:4500/guardian/v1/activities"
+        );
+        assert_eq!(
+            endpoint.base().host_str(),
+            Some("127.0.0.1"),
+            "the default must not leave this machine"
+        );
     }
 }

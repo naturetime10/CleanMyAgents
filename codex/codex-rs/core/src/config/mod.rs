@@ -2417,9 +2417,9 @@ fn guardian_config(guardian: Option<GuardianToml>) -> std::io::Result<GuardianCo
         return Ok(defaults);
     };
     let config = GuardianConfig {
-        // An absent `mode` falls back to the build's default rather than to
-        // `GuardianModeToml`'s, whose derived default is baked into the
-        // published config schema and cannot vary by profile.
+        // An absent `mode` falls back to the guard layer's own default, which
+        // `GuardianModeToml`'s derived default mirrors so the published config
+        // schema advertises the same thing.
         mode: guardian.mode.map_or(defaults.mode, |mode| match mode {
             GuardianModeToml::Off => GuardianMode::Off,
             GuardianModeToml::Csv => GuardianMode::Csv,
@@ -2429,7 +2429,10 @@ fn guardian_config(guardian: Option<GuardianToml>) -> std::io::Result<GuardianCo
         }),
         debug_dir: guardian.debug_dir.map(AbsolutePathBuf::into_path_buf),
         socket_path: guardian.socket_path.map(AbsolutePathBuf::into_path_buf),
-        endpoint: guardian.endpoint,
+        // An `api` mode that names no endpoint still has one: the default is a
+        // loopback address, so a monitor running on this machine is picked up
+        // without being configured.
+        endpoint: guardian.endpoint.or(defaults.endpoint),
         api_key_env: guardian.api_key_env,
         fail_closed: guardian.fail_closed.unwrap_or(defaults.fail_closed),
         request_timeout: guardian

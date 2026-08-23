@@ -555,7 +555,6 @@ pub struct GuardianToml {
 #[serde(rename_all = "snake_case")]
 pub enum GuardianModeToml {
     /// No guarding and no recording.
-    #[default]
     Off,
     /// Append every session activity to a per-session CSV file.
     Csv,
@@ -563,11 +562,13 @@ pub enum GuardianModeToml {
     Ipc,
     /// Record locally and enforce through the resident process.
     Both,
-    /// Delegate every decision to the HTTP backend named by `endpoint`.
+    /// Delegate every decision to the HTTP backend named by `endpoint`, which
+    /// defaults to a loopback address. The default mode.
     ///
     /// Every guarded action and recorded activity carries prompt text and tool
-    /// output, so this sends session content off the machine. It is never
-    /// selected by default.
+    /// output, so pointing `endpoint` at a remote host sends session content off
+    /// the machine.
+    #[default]
     Api,
 }
 

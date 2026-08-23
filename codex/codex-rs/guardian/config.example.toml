@@ -26,11 +26,12 @@
 #
 # `api` does not compose with `csv`: selecting it stops the local history.
 #
-# Default: "csv" from a source build, "off" from a release binary. A build from
-# source records without being asked so that a session run while debugging
-# leaves a trail; a shipped binary does not start writing prompts to disk on its
-# own.
-mode = "csv"
+# Default: "api", pointed at the loopback `endpoint` below. A session picks up a
+# monitor as soon as one is running on this machine and needs no configuration
+# to do it. Because the default is also `fail_closed = true`, a session started
+# with nothing listening on that port has its guarded tool calls denied -- set
+# `mode = "off"` or `fail_closed = false` while no backend is up.
+mode = "api"
 
 
 # ---------------------------------------------------------------------------
@@ -68,9 +69,9 @@ mode = "csv"
 # REST backend -- `api`
 # ---------------------------------------------------------------------------
 
-# Base URL of the backend. Required by `mode = "api"` and ignored by every other
-# mode. A `mode = "api"` without a usable endpoint is refused while config
-# loads, rather than discovered one blocked tool call at a time.
+# Base URL of the backend, used by `mode = "api"` and ignored by every other
+# mode. An endpoint that is not a URL is refused while config loads, rather than
+# discovered one blocked tool call at a time.
 #
 # A path prefix is kept, so "https://guardian.example/api" resolves to
 # "https://guardian.example/api/v1/reviews", not to the host root.
@@ -83,11 +84,12 @@ mode = "csv"
 # See `codex/docs/config.md` for the request and response shapes.
 #
 # Every guarded action and recorded activity carries prompt text and tool
-# output, so this sends session content off the machine. It is never selected by
-# default.
+# output. The default is a loopback address for exactly that reason: pointing
+# this at a remote host sends session content off the machine, so it is
+# something to do deliberately.
 #
-# Default: unset
-# endpoint = "https://guardian.example/api"
+# Default: "http://127.0.0.1:4500/guardian"
+endpoint = "http://127.0.0.1:4500/guardian"
 
 # Name of the environment variable holding the bearer token for `endpoint`.
 # The token itself is deliberately not a config key: a credential written into
@@ -105,10 +107,10 @@ mode = "csv"
 # Deny guarded actions when the guardian cannot be reached. On by default: a
 # guard that fails open is not a guard.
 #
-# The consequence is worth knowing before you turn a mode on. A session started
-# in `ipc` or `api` mode with nothing listening will have its tool calls
-# blocked. Set `mode = "off"` or `fail_closed = false` to opt out of that
-# posture -- the usual choice while a backend is still being built.
+# The consequence is worth knowing, because `api` is the default mode. A session
+# started with nothing listening on `endpoint` will have its tool calls blocked.
+# Set `mode = "off"` or `fail_closed = false` to opt out of that posture -- the
+# usual choice while a backend is still being built.
 #
 # Default: true
 fail_closed = true
@@ -128,7 +130,14 @@ request_timeout_ms = 3000
 # Ready-made tables
 # ---------------------------------------------------------------------------
 #
-# Local history only, the default from a source build:
+# The default, spelled out. Omitting `[guardian]` entirely gives you this:
+#
+#   [guardian]
+#   mode = "api"
+#   endpoint = "http://127.0.0.1:4500/guardian"
+#   fail_closed = true
+#
+# Local history instead of a backend, writing CSV under $CODEX_HOME:
 #
 #   [guardian]
 #   mode = "csv"
@@ -138,7 +147,6 @@ request_timeout_ms = 3000
 #
 #   [guardian]
 #   mode = "api"
-#   endpoint = "http://127.0.0.1:4500/guardian"
 #   fail_closed = false
 #
 # A REST backend in earnest:

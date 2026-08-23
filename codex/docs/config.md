@@ -30,14 +30,15 @@ A fully commented sample of every key, with its default, is checked in at
 ```toml
 [guardian]
 # off | csv | ipc | both | api
-# Default: csv for a debug build, off for a release build.
-mode = "csv"
+# Default: api, pointed at the loopback endpoint below.
+mode = "api"
 # Per-session history. Default: $CODEX_HOME/guardian/debug
 debug_dir = "/Users/me/.codex/guardian/debug"
 # Socket of the resident guardian process. Default: $CODEX_HOME/guardian/guardian.sock
 socket_path = "/Users/me/.codex/guardian/guardian.sock"
-# Base URL of the REST backend. Required by mode = "api", ignored otherwise.
-endpoint = "https://guardian.example/api"
+# Base URL of the REST backend, used by mode = "api", ignored otherwise.
+# Default: http://127.0.0.1:4500/guardian
+endpoint = "http://127.0.0.1:4500/guardian"
 # Environment variable holding the bearer token for `endpoint`. Optional.
 api_key_env = "CODEX_GUARDIAN_TOKEN"
 # Deny guarded actions when the guardian cannot be reached. Default: true
@@ -119,23 +120,29 @@ does not understand is not a guard. A backend may name the variant itself with a
 Reads — sessions, threads, history — are deliberately not part of this. They
 belong to whatever renders a session, not to the guard a turn runs through.
 
-A build from source records by default so that a session run while debugging
-leaves a trail without having been configured in advance. Released binaries
-default to `off`: writing every prompt and tool result to disk is opt-in. Files
-are written `0600` inside a `0700` directory, but they do contain prompt text
-and tool output, so treat the directory as sensitive.
+`api` is the default mode, pointed at `http://127.0.0.1:4500/guardian`, so a
+session delegates to a monitor as soon as one is running on this machine and
+needs no configuration to do it. The default endpoint is loopback on purpose:
+guarded actions carry prompt text and tool output, and the out-of-the-box
+configuration must not send that anywhere but this machine.
+
+In `csv` mode, files are written `0600` inside a `0700` directory, but they do
+contain prompt text and tool output, so treat the directory as sensitive.
 
 With `fail_closed = true` (the default), an unreachable guardian denies guarded
 actions, so a session started in `ipc` or `api` mode without a reachable
 guardian will have its tool calls blocked. Set `mode = "off"` or
 `fail_closed = false` to opt out of that posture.
 
-`api` mode sends prompt text and tool output off the machine, so it is never
-selected by default and has to be configured deliberately. Put the bearer token
-in the environment variable named by `api_key_env` rather than in `config.toml`,
-where a credential outlives the session that needed it. A `mode = "api"` without
-a usable `endpoint` is rejected when config loads, not at the first choke
-point.
+Because `api` is the default and `fail_closed` defaults to `true`, a session
+started with nothing listening on the endpoint has its guarded tool calls
+denied. Set `mode = "off"` or `fail_closed = false` while no backend is running.
+
+Pointing `endpoint` at a remote host sends prompt text and tool output off the
+machine, so that is something to do deliberately. Put the bearer token in the
+environment variable named by `api_key_env` rather than in `config.toml`, where
+a credential outlives the session that needed it. An `endpoint` that is not a
+URL is rejected when config loads, not at the first choke point.
 
 ## Content annotations (`chat_message_metadata_passthrough`)
 

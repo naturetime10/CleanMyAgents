@@ -22,6 +22,7 @@ use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::GuardianModeToml;
+use codex_guardian::GuardianMode;
 use codex_config::config_toml::GuardianToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -8094,30 +8095,77 @@ api_key_env = "CODEX_GUARDIAN_TOKEN"
     );
 }
 
-/// A guard that cannot reach its backend denies everything, so a mode that can
-/// never work has to be refused while config loads rather than discovered one
-/// blocked tool call at a time.
+/// A guard that cannot reach its backend denies everything, so an endpoint that
+/// can never work has to be refused while config loads rather than discovered
+/// one blocked tool call at a time.
 #[tokio::test]
-async fn load_config_rejects_api_mode_without_a_usable_endpoint() -> std::io::Result<()> {
-    for endpoint in [None, Some("guardian.example".to_string())] {
-        let codex_home = TempDir::new()?;
-        let cfg = ConfigToml {
-            guardian: Some(GuardianToml {
-                mode: Some(GuardianModeToml::Api),
-                endpoint: endpoint.clone(),
-                ..Default::default()
-            }),
+async fn load_config_rejects_an_unusable_guardian_endpoint() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        guardian: Some(GuardianToml {
+            mode: Some(GuardianModeToml::Api),
+            endpoint: Some("guardian.example".to_string()),
             ..Default::default()
-        };
-        let err = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            AbsolutePathBuf::try_from(codex_home.path().to_path_buf()).expect("absolute path"),
-        )
-        .await
-        .expect_err("api mode without a usable endpoint must not load");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{endpoint:?}");
-    }
+        }),
+        ..Default::default()
+    };
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        AbsolutePathBuf::try_from(codex_home.path().to_path_buf()).expect("absolute path"),
+    )
+    .await
+    .expect_err("an endpoint that is not a URL must not load");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    Ok(())
+}
+
+/// A session with no `[guardian]` table at all still delegates, and to a
+/// loopback address: the default may not send prompts off the machine.
+#[tokio::test]
+async fn guardian_defaults_to_the_local_backend() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        AbsolutePathBuf::try_from(codex_home.path().to_path_buf()).expect("absolute path"),
+    )
+    .await?;
+
+    assert_eq!(config.guardian.mode, GuardianMode::Api);
+    assert_eq!(
+        config.guardian.endpoint.as_deref(),
+        Some("http://127.0.0.1:4500/guardian")
+    );
+    assert!(config.guardian.fail_closed);
+
+    Ok(())
+}
+
+/// `mode = "api"` on its own is a complete configuration: the endpoint falls
+/// back to the same loopback default rather than failing the load.
+#[tokio::test]
+async fn guardian_api_mode_without_an_endpoint_uses_the_default() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        guardian: Some(GuardianToml {
+            mode: Some(GuardianModeToml::Api),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        AbsolutePathBuf::try_from(codex_home.path().to_path_buf()).expect("absolute path"),
+    )
+    .await?;
+
+    assert_eq!(
+        config.guardian.endpoint.as_deref(),
+        Some("http://127.0.0.1:4500/guardian")
+    );
 
     Ok(())
 }

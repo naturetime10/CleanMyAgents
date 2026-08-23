@@ -1415,7 +1415,7 @@
           "type": "string"
         },
         {
-          "description": "Delegate every decision to the HTTP backend named by `endpoint`.\n\nEvery guarded action and recorded activity carries prompt text and tool output, so this sends session content off the machine. It is never selected by default.",
+          "description": "Delegate every decision to the HTTP backend named by `endpoint`, which defaults to a loopback address. The default mode.\n\nEvery guarded action and recorded activity carries prompt text and tool output, so pointing `endpoint` at a remote host sends session content off the machine.",
           "enum": [
             "api"
           ],
