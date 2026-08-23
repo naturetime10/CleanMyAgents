@@ -1,0 +1,151 @@
+# Sample `[guardian]` configuration for the Codex guard layer.
+#
+# Copy the table you want into `$CODEX_HOME/config.toml` (`~/.codex/config.toml`
+# unless `CODEX_HOME` says otherwise). The whole table is optional: omit it and
+# every key falls back to the default noted below.
+#
+# The guard layer is an inline reference monitor that runs *above* the hook
+# subsystem. At every dispatch choke point -- prompt intake, tool and MCP calls,
+# tool results, approvals, MCP server admission, compaction -- it is asked for a
+# verdict before any configured hook runs, so its decision cannot be overridden
+# by hook config. Precedence is Guard -> Hooks -> automated review -> user.
+#
+# `[guardian]` is an ordinary config key, so it is also honoured in a project's
+# `.codex/config.toml`. Scoping it that way is the usual way to point one repo
+# at a REST backend while the user-level config keeps recording locally.
+
+[guardian]
+
+# Which implementation runs. One of:
+#
+#   off   No guarding and no recording.
+#   csv   Local history only. Never denies anything.
+#   ipc   Delegate every decision to a resident local process over a Unix socket.
+#   both  Record locally *and* enforce through the resident process.
+#   api   Delegate every decision to the HTTP backend at `endpoint`.
+#
+# `api` does not compose with `csv`: selecting it stops the local history.
+#
+# Default: "csv" from a source build, "off" from a release binary. A build from
+# source records without being asked so that a session run while debugging
+# leaves a trail; a shipped binary does not start writing prompts to disk on its
+# own.
+mode = "csv"
+
+
+# ---------------------------------------------------------------------------
+# Local history -- `csv` and `both`
+# ---------------------------------------------------------------------------
+
+# Directory holding the per-session history: one `<thread_id>.csv` with a fixed
+# header and one row per guarded action and recorded activity, beside a
+# `<thread_id>.meta.yml` sidecar carrying everything constant for that file --
+# the session it belongs to, the account, model, originator, starting directory,
+# and running totals. Those are deliberately not columns, so grouping sidecars
+# by `session_id` reassembles a run that spawned sub-agents without opening a
+# single history file.
+#
+# Files are written 0600 inside a 0700 directory, but they do contain prompt
+# text and tool output. Treat the directory as sensitive.
+#
+# Default: $CODEX_HOME/guardian/debug
+# debug_dir = "/Users/me/.codex/guardian/debug"
+
+
+# ---------------------------------------------------------------------------
+# Resident local process -- `ipc` and `both`
+# ---------------------------------------------------------------------------
+
+# Socket the resident guardian process listens on, exchanging newline-delimited
+# JSON: the request carries the session context plus the action, the reply
+# carries a verdict of `allow`, `deny`, `rewrite`, or `defer`.
+#
+# Default: $CODEX_HOME/guardian/guardian.sock
+# socket_path = "/Users/me/.codex/guardian/guardian.sock"
+
+
+# ---------------------------------------------------------------------------
+# REST backend -- `api`
+# ---------------------------------------------------------------------------
+
+# Base URL of the backend. Required by `mode = "api"` and ignored by every other
+# mode. A `mode = "api"` without a usable endpoint is refused while config
+# loads, rather than discovered one blocked tool call at a time.
+#
+# A path prefix is kept, so "https://guardian.example/api" resolves to
+# "https://guardian.example/api/v1/reviews", not to the host root.
+#
+# Two endpoints carry the whole protocol:
+#
+#   POST {endpoint}/v1/reviews     submits one guarded action, returns a verdict
+#   POST {endpoint}/v1/activities  reports what already happened, batched
+#
+# See `codex/docs/config.md` for the request and response shapes.
+#
+# Every guarded action and recorded activity carries prompt text and tool
+# output, so this sends session content off the machine. It is never selected by
+# default.
+#
+# Default: unset
+# endpoint = "https://guardian.example/api"
+
+# Name of the environment variable holding the bearer token for `endpoint`.
+# The token itself is deliberately not a config key: a credential written into
+# `config.toml` outlives the session that needed it. Leave unset to send
+# unauthenticated.
+#
+# Default: unset
+# api_key_env = "CODEX_GUARDIAN_TOKEN"
+
+
+# ---------------------------------------------------------------------------
+# Posture -- every enforcing mode
+# ---------------------------------------------------------------------------
+
+# Deny guarded actions when the guardian cannot be reached. On by default: a
+# guard that fails open is not a guard.
+#
+# The consequence is worth knowing before you turn a mode on. A session started
+# in `ipc` or `api` mode with nothing listening will have its tool calls
+# blocked. Set `mode = "off"` or `fail_closed = false` to opt out of that
+# posture -- the usual choice while a backend is still being built.
+#
+# Default: true
+fail_closed = true
+
+# Deadline for one round trip to the guardian, in milliseconds.
+#
+# For `api` this covers the whole review: a backend that needs a human answers
+# `202` and is polled under this same budget, so an approval nobody answers
+# expires into a timeout -- and then into whatever `fail_closed` says -- rather
+# than being mistaken for permission.
+#
+# Default: 3000
+request_timeout_ms = 3000
+
+
+# ---------------------------------------------------------------------------
+# Ready-made tables
+# ---------------------------------------------------------------------------
+#
+# Local history only, the default from a source build:
+#
+#   [guardian]
+#   mode = "csv"
+#
+# A REST backend still under construction. Failing open keeps a half-built
+# backend from blocking every tool call while you work on it:
+#
+#   [guardian]
+#   mode = "api"
+#   endpoint = "http://127.0.0.1:4500/guardian"
+#   fail_closed = false
+#
+# A REST backend in earnest:
+#
+#   [guardian]
+#   mode = "api"
+#   endpoint = "https://guardian.example/api"
+#   api_key_env = "CODEX_GUARDIAN_TOKEN"
+#   fail_closed = true
+#   request_timeout_ms = 3000

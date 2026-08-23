@@ -24,6 +24,9 @@ Precedence at a choke point is Guard → Hooks → automated review → user. It
 records session activity that hooks never see, such as token usage and live
 context-window occupancy.
 
+A fully commented sample of every key, with its default, is checked in at
+[`codex-rs/guardian/config.example.toml`](../codex-rs/guardian/config.example.toml).
+
 ```toml
 [guardian]
 # off | csv | ipc | both | api
