@@ -1,0 +1,50 @@
+:root {
+  --ink: #f2f2f4; --ink2: #a9adb6; --crit: #ff6b63; --warn: #f0b429;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: transparent; font: 13px/1.45 var(--sans); color: var(--ink); overflow: hidden; }
+
+/* Dark and floating, because it sits over whatever you were doing rather than
+   inside any window. */
+.island {
+  margin: 4px; padding: 13px 15px 12px;
+  background: rgba(28, 28, 32, 0.94);
+  backdrop-filter: blur(22px) saturate(180%);
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+  animation: drop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes drop { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+
+.head { display: flex; align-items: center; gap: 8px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--warn); }
+.dot[data-sev="critical"] { background: var(--crit); }
+.says { font-weight: 600; letter-spacing: -0.01em; }
+.tool { font: 11px var(--mono); color: var(--ink2); }
+.clock { margin-left: auto; font: 11px var(--mono); color: var(--ink2); font-variant-numeric: tabular-nums; }
+
+.cmd {
+  display: block; margin: 9px 0 11px; padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.07); border-radius: 9px;
+  font: 11.5px/1.5 var(--mono); color: #e6e6ea;
+  max-height: 42px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.row { display: flex; align-items: center; gap: 8px; }
+button { font: inherit; cursor: pointer; border: 0; }
+.primary { flex: 1; padding: 8px; border-radius: 9px; font-weight: 600; font-size: 13px; }
+.deny { background: rgba(255, 107, 99, 0.16); color: #ff8b84; }
+.deny:hover { background: rgba(255, 107, 99, 0.26); }
+.allow { background: rgba(255, 255, 255, 0.13); color: var(--ink); }
+.allow:hover { background: rgba(255, 255, 255, 0.2); }
+
+/* "Always" is a policy. Small, quiet, and needing an aimed click is the point,
+   not an oversight. */
+.minor { margin-top: 9px; font-size: 11px; }
+.minor button { background: none; color: var(--ink2); padding: 2px 0; }
+.minor button:hover { color: var(--ink); text-decoration: underline; }
+.sep { color: rgba(255, 255, 255, 0.25); }
+.why { margin-left: auto; font: 10px var(--mono); color: rgba(255, 255, 255, 0.35); }

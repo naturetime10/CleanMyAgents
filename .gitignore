@@ -1,8 +1,13 @@
-# Vendored upstream repos — cloned independently, not tracked here
+# Vendored upstream repo — cloned independently, not tracked here
 /backend/
-/desktop/
 
 # Console build output
 /webui/node_modules/
 /webui/dist/
+
+# Menu bar app build output
+/desktop/node_modules/
+/desktop/out/
+/desktop/dist/
+
 .DS_Store
