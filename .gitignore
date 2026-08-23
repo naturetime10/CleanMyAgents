@@ -1,0 +1,4 @@
+# Vendored upstream repos — cloned independently, not tracked here
+/backend/
+/desktop/
+/webui/
