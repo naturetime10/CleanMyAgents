@@ -321,3 +321,23 @@
   margin-left: auto; font-size: 15px; font-weight: 600; color: var(--ink);
   letter-spacing: -0.01em;
 }
+
+/* deep scan — one row between the reclaim bar and the findings list */
+.sc-deep {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 13px 18px; margin-bottom: 18px;
+}
+.sc-deep-note { font-size: 13px; color: var(--ink2); display: inline-flex; align-items: center; gap: 9px; }
+.sc-deep[data-state="error"] .sc-deep-note { color: var(--crit); }
+.sc-deep-btn {
+  margin-left: auto; flex: none; cursor: pointer;
+  font: 500 13px var(--sans); color: var(--ink);
+  background: none; border: 1px solid var(--line); border-radius: 7px; padding: 7px 14px;
+}
+.sc-deep-btn:hover { border-color: var(--ink3); }
+.sc-deep-spin {
+  width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: sc-spin 0.9s linear infinite;
+}
