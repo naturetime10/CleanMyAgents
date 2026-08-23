@@ -1396,6 +1396,20 @@
             "csv"
           ],
           "type": "string"
+        },
+        {
+          "description": "Delegate every decision to a resident local process over IPC.",
+          "enum": [
+            "ipc"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Record locally and enforce through the resident process.",
+          "enum": [
+            "both"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1411,6 +1425,10 @@
           ],
           "description": "Directory holding the per-session CSV history. Defaults to `$CODEX_HOME/guardian/debug`."
         },
+        "fail_closed": {
+          "description": "Deny guarded actions when the guardian cannot be reached. Defaults to true: a guard that fails open is not a guard.",
+          "type": "boolean"
+        },
         "mode": {
           "allOf": [
             {
@@ -1418,6 +1436,20 @@
             }
           ],
           "description": "Which guardian implementation to run. Defaults to `off`."
+        },
+        "request_timeout_ms": {
+          "description": "Deadline for one round trip to the resident guardian process.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "socket_path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Socket the resident guardian process listens on. Defaults to `$CODEX_HOME/guardian/guardian.sock`."
         }
       },
       "type": "object"

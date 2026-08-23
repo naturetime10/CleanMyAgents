@@ -532,6 +532,14 @@ pub struct GuardianToml {
     /// Directory holding the per-session CSV history.
     /// Defaults to `$CODEX_HOME/guardian/debug`.
     pub debug_dir: Option<AbsolutePathBuf>,
+    /// Socket the resident guardian process listens on.
+    /// Defaults to `$CODEX_HOME/guardian/guardian.sock`.
+    pub socket_path: Option<AbsolutePathBuf>,
+    /// Deny guarded actions when the guardian cannot be reached. Defaults to
+    /// true: a guard that fails open is not a guard.
+    pub fail_closed: Option<bool>,
+    /// Deadline for one round trip to the resident guardian process.
+    pub request_timeout_ms: Option<u64>,
 }
 
 /// Guardian implementation selected by `[guardian] mode`.
@@ -543,6 +551,10 @@ pub enum GuardianModeToml {
     Off,
     /// Append every session activity to a per-session CSV file.
     Csv,
+    /// Delegate every decision to a resident local process over IPC.
+    Ipc,
+    /// Record locally and enforce through the resident process.
+    Both,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
