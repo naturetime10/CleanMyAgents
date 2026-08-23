@@ -25,11 +25,13 @@ use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
-use codex_config::config_toml::GuardianModeToml;
-use codex_config::config_toml::GuardianToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
+use std::time::Duration;
+
+use codex_config::config_toml::GuardianModeToml;
+use codex_config::config_toml::GuardianToml;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::loader::load_config_layers_state;
@@ -2405,15 +2407,24 @@ fn resolve_tool_suggest_config_from_config(
 
 /// Maps the `[guardian]` table onto the guard layer's own config type.
 fn guardian_config(guardian: Option<GuardianToml>) -> GuardianConfig {
+    let defaults = GuardianConfig::default();
     let Some(guardian) = guardian else {
-        return GuardianConfig::default();
+        return defaults;
     };
     GuardianConfig {
         mode: match guardian.mode.unwrap_or_default() {
             GuardianModeToml::Off => GuardianMode::Off,
             GuardianModeToml::Csv => GuardianMode::Csv,
+            GuardianModeToml::Ipc => GuardianMode::Ipc,
+            GuardianModeToml::Both => GuardianMode::Both,
         },
         debug_dir: guardian.debug_dir.map(AbsolutePathBuf::into_path_buf),
+        socket_path: guardian.socket_path.map(AbsolutePathBuf::into_path_buf),
+        fail_closed: guardian.fail_closed.unwrap_or(defaults.fail_closed),
+        request_timeout: guardian
+            .request_timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(defaults.request_timeout),
     }
 }
 
