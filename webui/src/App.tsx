@@ -36,7 +36,10 @@ export default function App() {
         <div className="org">CleanMyAgent</div>
         <div className="badge">local</div>
         <div className="spacer" />
-        {error && <div className="stale">backend unreachable — {error}</div>}
+        {/* The ops snapshot is the old sidecar's contract and nothing serves it
+            yet. Trajectory and Scan run on the session store instead, so a
+            missing snapshot is not a broken app — the pages that need it say
+            so themselves rather than a banner shouting on every view. */}
       </div>
 
       <nav>
@@ -57,7 +60,10 @@ export default function App() {
         {/* Scan and Trajectory run on their own data, so neither waits on the backend. */}
         {tab === "scan" ? <Scan />
           : tab === "sessions" ? <Trajectory /> : !snapshot ? (
-          <div className="loading">{error ? "Waiting for the backend…" : "Loading…"}</div>
+          <div className="loading">
+            {error ? "This view still reads the ops snapshot, which no longer has a source. Scan and Trajectory work."
+                   : "Loading…"}
+          </div>
         ) : tab === "injectors" ? <Hooks />
           : tab === "mcp" ? <Mcp s={snapshot} sel={sel} setSel={setSel} reload={reload} />
           : tab === "efficiency" ? <Efficiency s={snapshot} />
