@@ -452,8 +452,14 @@ impl Session {
         };
 
         // Approval precedence is:
+        // 0. Guard (codex-monitor) — see GUARD GATE below
         // 1. Hooks
         // 2. If StrictAutoReview || Guardian enabled, then Guardian. Else, user.
+        // TODO(codex-monitor): GUARD GATE (above the hook layer). The guard is NOT a
+        // hook and sits above Hooks/Guardian/user. Call the monitor HERE, BEFORE
+        // `run_permission_request_hooks`, and if it returns Deny/Allow, short-circuit
+        // `resolution` with source Guard (FAIL-CLOSED on unreachable) so no hook or
+        // Guardian can override it; return None only to defer to the layers below.
         let resolution = match run_permission_request_hooks(
             self,
             ctx.review_context.turn(),

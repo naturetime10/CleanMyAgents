@@ -563,7 +563,15 @@ impl ToolRegistry {
             return Err(err);
         }
 
+        // TODO(codex-monitor): GUARD GATE (above the hook layer) for ALL tool/MCP
+        // calls. The guard is NOT a hook — call the monitor HERE, before
+        // `run_pre_tool_use_hooks` below, so its verdict is independent of hook config
+        // and cannot be overridden by any hook. Deny -> return
+        // FunctionCallError::RespondToModel (FAIL-CLOSED when unreachable); Rewrite ->
+        // update `invocation`; Allow -> fall through. Hooks then run only on what the
+        // guard admits. Precedence: Guard -> Hooks -> exec.
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
+            // Hook layer (below the guard): configured PreToolUse hooks.
             match run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
@@ -656,6 +664,12 @@ impl ToolRegistry {
                 },
             )
             .await;
+        // TODO(codex-monitor): OUTPUT-REWRITE TAP. `result` here is the tool/MCP
+        // output before it becomes the model-visible response item. This is the ONLY
+        // place to strip ads/prompt-injections/secrets from tool results — the
+        // `PostToolUse` hook can record/block but cannot rewrite output
+        // (`updatedMCPToolOutput` is rejected in output_parser.rs). Send `result` to
+        // the monitor and substitute a sanitized version before it flows to the model.
         let success = match &result {
             Ok(result) => result.result.success_for_logging(),
             Err(_) => false,
@@ -678,6 +692,8 @@ impl ToolRegistry {
         };
         let post_tool_use_outcome = if let Some(post_tool_use_payload) = post_tool_use_payload {
             Some(
+                // TODO(codex-monitor): post-exec recording point; monitor tap lives in
+                // `hook_runtime::run_post_tool_use_hooks`.
                 run_post_tool_use_hooks(
                     &invocation.session,
                     &invocation.turn,

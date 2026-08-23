@@ -202,6 +202,14 @@ pub(crate) fn discover_handlers(
     }
 }
 
+// TODO(codex-monitor): EXCLUSIVE-AUTHORITY registration. Register the monitor's
+// hooks as managed/required here (is_managed: true, HookRequirement::Required,
+// bypass_hook_trust) so they cannot be disabled or trust-gated by user/project
+// config. Combined with `allow_managed_hooks_only` (see discover_handlers, ~:105),
+// this suppresses all non-managed hooks so no other plugin's hooks can run
+// alongside or override the monitor. This is the tamper-resistant "kernel-module"
+// posture; the runtime taps in core/src/hook_runtime.rs give the veto, this gives
+// exclusivity.
 fn append_managed_requirement_handlers(
     handlers: &mut Vec<ConfiguredHandler>,
     hook_entries: &mut Vec<HookListEntry>,

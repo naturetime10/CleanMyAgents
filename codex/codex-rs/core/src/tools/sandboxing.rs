@@ -308,6 +308,14 @@ pub(crate) fn managed_network_for_sandbox_permissions(
 pub(crate) trait Approvable<Req> {
     /// Return per-request sandbox permissions for first-attempt sandbox
     /// selection. Most tools use the ambient sandbox policy unchanged.
+    // TODO(codex-monitor): CONTAINMENT coordination point (OS sandbox is a separate
+    // subsystem from the hook taps). Path-scoping (writable roots + read-only
+    // carve-outs), per-task profiles (restricted surface for cleanup threads vs.
+    // full shell for coding threads), and "refuse to run rather than run unsandboxed"
+    // are enforced here by tightening SandboxPermissions per request/agent_type.
+    // The monitor can supply/override the profile here; PreToolUse denial only vetoes,
+    // it does not confine. Quarantine (move-not-delete) is best done by rewriting the
+    // action at the PreToolUse tap + monitor-side mv+manifest.
     fn sandbox_permissions(&self, _req: &Req) -> SandboxPermissions {
         SandboxPermissions::UseDefault
     }

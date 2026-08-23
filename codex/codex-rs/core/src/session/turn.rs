@@ -621,6 +621,12 @@ pub(crate) async fn run_hooks_and_record_inputs(
     let mut blocked_input = false;
     let mut accepted_user_input = false;
     for input_item in input {
+        // TODO(codex-monitor): GUARD GATE (above the hook layer) for prompt intake.
+        // The guard is NOT a hook — call the monitor HERE, before
+        // `inspect_pending_input` below, so it decides first and independently of hook
+        // config. Deny -> skip record_pending_input (prompt never enters history,
+        // FAIL-CLOSED on unreachable); Rewrite -> replace `input_item` content; Allow
+        // -> fall through to the hook layer.
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
