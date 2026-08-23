@@ -1,122 +1,66 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useEffect, useState } from "react";
+import { useSnapshot } from "./api";
+import { Icon } from "./components";
+import { Analytics, Efficiency, Findings, Mcp, VIEWS, type ViewId } from "./views";
+import Hooks from "./hooks/Hooks";
+import Trajectory from "./trajectory/Trajectory";
+import "./theme.css";
 
-function App() {
-  const [count, setCount] = useState(0)
+const readHash = (): ViewId => {
+  const h = location.hash.slice(1) as ViewId;
+  return VIEWS.some((v) => v.id === h) ? h : "overview";
+};
+
+export default function App() {
+  const { snapshot, error, reload } = useSnapshot();
+  const [tab, setTab] = useState<ViewId>(readHash);
+  const [sel, setSel] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onHash = () => { setTab(readHash()); setSel(null); };
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
+  }, []);
+
+  const go = (next: string, selection: string) => {
+    setSel(selection);
+    setTab(next as ViewId);
+    location.hash = next;
+  };
 
   return (
     <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+      <div className="topbar">
+        <div className="mark">c</div>
+        <div className="org">CleanMyAgent</div>
+        <div className="badge">local</div>
+        <div className="spacer" />
+        {error && <div className="stale">backend unreachable — {error}</div>}
+      </div>
 
-      <div className="ticks"></div>
+      <nav>
+        {VIEWS.map((v) => (
+          <button key={v.id} className={v.id === tab ? "on" : ""}
+                  onClick={() => { setTab(v.id); setSel(null); location.hash = v.id; }}>
+            <Icon d={v.icon} />{v.label}
+          </button>
+        ))}
+        {tab === "sessions" && (
+          <button className="nav-action" type="button">
+            <Icon d="M12 3v11m0 0l-4-4m4 4l4-4M4 17v3h16v-3" />Session log
+          </button>
+        )}
+      </nav>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
+      <div className={tab === "sessions" ? "page page-bleed" : "page"}>
+        {tab === "sessions" ? <Trajectory /> : !snapshot ? (
+          <div className="loading">{error ? "Waiting for the backend…" : "Loading…"}</div>
+        ) : tab === "injectors" ? <Hooks />
+          : tab === "mcp" ? <Mcp s={snapshot} sel={sel} setSel={setSel} reload={reload} />
+          : tab === "efficiency" ? <Efficiency s={snapshot} />
+          : tab === "findings" ? <Findings s={snapshot} go={go} />
+          : <Analytics s={snapshot} go={go} />}
+      </div>
     </>
-  )
+  );
 }
-
-export default App
