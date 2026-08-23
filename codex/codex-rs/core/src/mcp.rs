@@ -155,6 +155,12 @@ impl McpManager {
         originator: Option<&str>,
         environment_scope: McpEnvironmentScope<'_>,
     ) -> McpRuntimeProjection {
+        // TODO(codex-monitor): PLUGIN-GATING (MCP admission by name/identity). This
+        // builds the effective set of MCP servers/connectors admitted for the turn.
+        // Gate here to prevent unapproved servers from ever connecting (allowlist by
+        // server name + connector identity), rather than only denying their tool calls
+        // later at the PreToolUse tap. This is admission control; the runtime tap in
+        // hook_runtime::run_pre_tool_use_hooks is call-time enforcement.
         let config = context.config();
         let mut selected_plugin_available = false;
         let mut selected_plugin_connector_sources = Vec::new();

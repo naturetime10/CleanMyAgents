@@ -4069,6 +4069,13 @@ impl Session {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
+        // TODO(codex-monitor): TOKEN-USAGE TAP. This is the single choke point for
+        // token accounting (`info`: input/output/total tokens per TokenUsageInfo, plus
+        // rate limits), emitted after each model response. NOTE: token usage is NOT
+        // available on the hook/shim path — the daemon never sees it via the socket, so
+        // this requires a code-level tap: forward `info` + `rate_limits` (keyed by
+        // session_id/turn_id from `turn_context`) to the monitor for per-user/team
+        // token-spend analytics. Raw provider usage originates in client.rs (~:2093).
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
     }

@@ -78,6 +78,13 @@ pub(crate) async fn context_window_token_status(
         .is_some_and(|limit| auto_compact_scope_tokens >= limit)
         || full_context_window_limit_reached;
 
+    // TODO(codex-monitor): CONTEXT-WINDOW TAP. Distinct from the TOKEN-USAGE tap
+    // (session/mod.rs send_token_count_event = cumulative spend/billing). This is live
+    // context OCCUPANCY: `active_context_tokens` (current context size after
+    // compaction) vs `full_context_window_limit`, `base_window_tokens_remaining`, and
+    // the compaction-pressure flags. Forward these (keyed by session_id/turn_id) to
+    // the monitor for context-fullness telemetry + "garbage detection" (waste in
+    // context). Code-level tap: not on the hook/shim path.
     ContextWindowTokenStatus {
         active_context_tokens,
         auto_compact_scope_tokens,
