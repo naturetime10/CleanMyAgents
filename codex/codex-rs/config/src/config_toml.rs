@@ -529,6 +529,9 @@ pub struct ConfigToml {
 pub struct GuardianToml {
     /// Which guardian implementation to run. Defaults to `off`.
     pub mode: Option<GuardianModeToml>,
+    /// Directory holding the per-session CSV history.
+    /// Defaults to `$CODEX_HOME/guardian/debug`.
+    pub debug_dir: Option<AbsolutePathBuf>,
 }
 
 /// Guardian implementation selected by `[guardian] mode`.
@@ -538,6 +541,8 @@ pub enum GuardianModeToml {
     /// No guarding and no recording.
     #[default]
     Off,
+    /// Append every session activity to a per-session CSV file.
+    Csv,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

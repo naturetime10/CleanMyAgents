@@ -2411,7 +2411,9 @@ fn guardian_config(guardian: Option<GuardianToml>) -> GuardianConfig {
     GuardianConfig {
         mode: match guardian.mode.unwrap_or_default() {
             GuardianModeToml::Off => GuardianMode::Off,
+            GuardianModeToml::Csv => GuardianMode::Csv,
         },
+        debug_dir: guardian.debug_dir.map(AbsolutePathBuf::into_path_buf),
     }
 }
 
