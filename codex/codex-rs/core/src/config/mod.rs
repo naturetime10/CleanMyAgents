@@ -25,6 +25,8 @@ use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::GuardianModeToml;
+use codex_config::config_toml::GuardianToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -74,6 +76,8 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_guardian::GuardianConfig;
+use codex_guardian::GuardianMode;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_install_context::InstallContext;
@@ -996,6 +1000,9 @@ pub struct Config {
     pub experimental_realtime_start_instructions: Option<String>,
     /// Experimental / do not use. Selects the thread persistence backend.
     pub experimental_thread_store: ThreadStoreConfig,
+    /// Inline reference monitor ("guard layer") that reviews and records
+    /// session activity above the hook layer.
+    pub guardian: GuardianConfig,
     /// When set, restricts ChatGPT login to one or more workspace identifiers.
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
 
@@ -2393,6 +2400,18 @@ fn resolve_tool_suggest_config_from_config(
     ToolSuggestConfig {
         discoverables,
         disabled_tools,
+    }
+}
+
+/// Maps the `[guardian]` table onto the guard layer's own config type.
+fn guardian_config(guardian: Option<GuardianToml>) -> GuardianConfig {
+    let Some(guardian) = guardian else {
+        return GuardianConfig::default();
+    };
+    GuardianConfig {
+        mode: match guardian.mode.unwrap_or_default() {
+            GuardianModeToml::Off => GuardianMode::Off,
+        },
     }
 }
 
@@ -4252,6 +4271,7 @@ impl Config {
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             experimental_thread_store: thread_store_config(cfg.experimental_thread_store),
+            guardian: guardian_config(cfg.guardian),
             forced_chatgpt_workspace_id,
             forced_login_method,
             web_search_mode: constrained_web_search_mode.value,

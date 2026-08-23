@@ -7,8 +7,11 @@
 use super::session::SessionConfiguration;
 use super::*;
 use crate::mcp::McpRuntimeProjection;
+use crate::session::guardian_tap;
 use codex_config::McpServerDisabledReason;
 use codex_config::McpServerTransportConfig;
+use codex_guardian::GuardedAction;
+use codex_guardian::Verdict;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::McpEnvironmentAuthority;
@@ -142,6 +145,48 @@ impl Session {
     }
 
     /// Adds effective executor-owned configuration from this exact thread snapshot.
+    /// GUARD GATE: admission control for MCP servers.
+    ///
+    /// Denying a server here keeps it from ever connecting, which is stronger
+    /// than denying its tool calls later at the tool gate. The guard sees each
+    /// server the turn would otherwise admit; a denied server is dropped from
+    /// the catalog, preserving the sources of the rest.
+    pub(super) async fn admit_mcp_servers(
+        &self,
+        mut projection: McpRuntimeProjection,
+    ) -> McpRuntimeProjection {
+        let mut servers = projection.config.mcp_server_catalog.configured_servers();
+        if servers.is_empty() {
+            return projection;
+        }
+
+        let mut denied = Vec::new();
+        for name in servers.keys() {
+            let verdict = guardian_tap::review_session(
+                self,
+                GuardedAction::McpAdmission {
+                    server_name: name.clone(),
+                    connector_id: None,
+                },
+            )
+            .await;
+            if let Verdict::Deny { reason } = verdict {
+                tracing::warn!(server = name, "guardian denied MCP server: {reason}");
+                denied.push(name.clone());
+            }
+        }
+        if denied.is_empty() {
+            return projection;
+        }
+
+        servers.retain(|name, _| !denied.contains(name));
+        projection.config.mcp_server_catalog = projection
+            .config
+            .mcp_server_catalog
+            .with_materialized_servers(servers);
+        projection
+    }
+
     pub(super) fn project_selected_environment_mcp_servers<'a>(
         &'a self,
         config: &'a Config,

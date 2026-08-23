@@ -5917,6 +5917,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     )
     .expect("initialize test hooks");
     let services = SessionServices {
+        guardian: Arc::new(codex_guardian::NoopGuardian),
+        guardian_identity: crate::session::guardian_tap::GuardianIdentity::default(),
         mcp_runtime,
         mcp_handler_cache: Default::default(),
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -8126,6 +8128,8 @@ where
     )
     .expect("initialize test hooks");
     let services = SessionServices {
+        guardian: Arc::new(codex_guardian::NoopGuardian),
+        guardian_identity: crate::session::guardian_tap::GuardianIdentity::default(),
         mcp_runtime,
         mcp_handler_cache: Default::default(),
         unified_exec_manager: UnifiedExecProcessManager::new(

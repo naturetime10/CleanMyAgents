@@ -394,3 +394,28 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     assert!(!request.exec_server_enforce_managed_network);
     assert_eq!(request.exec_server_managed_network, Some(managed_network));
 }
+
+#[test]
+fn guard_containment_refuses_escalation_out_of_the_sandbox() {
+    for containment in [
+        SandboxProfileOverride::ReadOnly,
+        SandboxProfileOverride::RequireSandbox,
+    ] {
+        assert_eq!(
+            contain_sandbox_permissions(SandboxPermissions::RequireEscalated, Some(containment)),
+            SandboxPermissions::UseDefault
+        );
+    }
+}
+
+#[test]
+fn without_guard_containment_the_requested_permissions_stand() {
+    assert_eq!(
+        contain_sandbox_permissions(SandboxPermissions::RequireEscalated, None),
+        SandboxPermissions::RequireEscalated
+    );
+    assert_eq!(
+        contain_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, None),
+        SandboxPermissions::WithAdditionalPermissions
+    );
+}

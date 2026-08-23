@@ -34,6 +34,7 @@ use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::guardian_tap;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -74,6 +75,9 @@ use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
+use codex_guardian::Activity;
+use codex_guardian::GuardedAction;
+use codex_guardian::Verdict;
 use codex_login::CodexAuth;
 use codex_model_provider::RemoteCompactionSupport;
 use codex_protocol::ResponseItemId;
@@ -85,6 +89,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -621,24 +626,55 @@ pub(crate) async fn run_hooks_and_record_inputs(
     let mut blocked_input = false;
     let mut accepted_user_input = false;
     for input_item in input {
-        // TODO(codex-monitor): GUARD GATE (above the hook layer) for prompt intake.
-        // The guard is NOT a hook — call the monitor HERE, before
-        // `inspect_pending_input` below, so it decides first and independently of hook
-        // config. Deny -> skip record_pending_input (prompt never enters history,
-        // FAIL-CLOSED on unreachable); Rewrite -> replace `input_item` content; Allow
-        // -> fall through to the hook layer.
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+        // GUARD GATE (above the hook layer) for prompt intake. The guard is not a
+        // hook: it decides here, before `inspect_pending_input` below, so its verdict
+        // is independent of hook config. A denied prompt never enters history.
+        let mut input_item = input_item.clone();
+        if let TurnInput::UserInput { content, .. } = &input_item {
+            let verdict = guardian_tap::review(
+                sess,
+                turn_context,
+                GuardedAction::Prompt {
+                    text: UserMessageItem::new(content).message(),
+                },
+            )
+            .await;
+            match verdict {
+                Verdict::Deny { .. } => {
+                    blocked_input = true;
+                    continue;
+                }
+                Verdict::Rewrite { payload, .. } => {
+                    rewrite_user_input(&mut input_item, payload);
+                }
+                Verdict::Allow | Verdict::Defer => {}
+            }
+        }
+
+        let hook_outcome = inspect_pending_input(sess, turn_context, &input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
+            if let TurnInput::UserInput { content, .. } = &input_item
+                && !content.is_empty()
+            {
                 accepted_user_input = true;
+                // RECORDING TAP: the prompt as it actually entered history, after any
+                // guard rewrite.
+                guardian_tap::record(
+                    sess,
+                    turn_context,
+                    Activity::PromptRecorded {
+                        text: UserMessageItem::new(content).message(),
+                    },
+                )
+                .await;
             }
             record_pending_input(
                 sess,
                 turn_context,
-                input_item.clone(),
+                input_item,
                 hook_outcome.additional_contexts,
                 persist_context,
             )
@@ -646,6 +682,30 @@ pub(crate) async fn run_hooks_and_record_inputs(
         }
     }
     blocked_input && !accepted_user_input
+}
+
+/// Replaces the text of a user prompt with the guard's rewrite.
+///
+/// Non-text parts (images) are preserved and follow the rewritten text; every
+/// original text part is superseded, which is the point of a rewrite.
+fn rewrite_user_input(input_item: &mut TurnInput, payload: serde_json::Value) {
+    let TurnInput::UserInput { content, .. } = input_item else {
+        return;
+    };
+    let text = match payload {
+        serde_json::Value::String(text) => text,
+        other => other.to_string(),
+    };
+    let mut rewritten = vec![UserInput::Text {
+        text,
+        text_elements: Vec::new(),
+    }];
+    rewritten.extend(
+        content
+            .drain(..)
+            .filter(|item| !matches!(item, UserInput::Text { .. })),
+    );
+    *content = rewritten;
 }
 
 fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {

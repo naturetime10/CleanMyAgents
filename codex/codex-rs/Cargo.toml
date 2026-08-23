@@ -35,6 +35,7 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
+    "guardian",
     "context-fragments",
     "shell-command",
     "shell-escalation",
@@ -209,6 +210,7 @@ codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
+codex-guardian = { path = "guardian" }
 codex-hooks = { path = "hooks" }
 codex-history = { path = "history" }
 codex-keyring-store = { path = "keyring-store" }

@@ -22,6 +22,7 @@ use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::contain_sandbox_permissions;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
@@ -144,13 +145,24 @@ impl ToolOrchestrator {
         // 1) Approval
         let mut already_approved = false;
 
+        // CONTAINMENT: the guard may tighten the sandbox for this request. A denial
+        // at the tool gate only vetoes an action; this confines one that is allowed
+        // to run, and can refuse to run it unsandboxed at all.
+        let guardian = &tool_ctx.session.services.guardian;
+        let guard_containment = guardian.is_enabled().then(|| {
+            guardian.sandbox_override(&codex_guardian::SandboxContext {
+                thread_id: &tool_ctx.session.thread_id.to_string(),
+                turn_id: &turn_ctx.sub_id,
+                tool_name: &otel_tn,
+                agent_type: None,
+            })
+        });
+        let requested_sandbox_permissions =
+            contain_sandbox_permissions(tool.sandbox_permissions(req), guard_containment.flatten());
+
         let environment = tool.turn_environment(req);
         let owner_network_policy = environment.config().network_policy.is_some();
-        if owner_network_policy
-            && tool
-                .sandbox_permissions(req)
-                .requires_escalated_permissions()
-        {
+        if owner_network_policy && requested_sandbox_permissions.requires_escalated_permissions() {
             return Err(ToolError::Rejected(
                 "attachment-owned network policy cannot be bypassed by sandbox escalation"
                     .to_string(),
@@ -233,7 +245,7 @@ impl ToolOrchestrator {
             !owner_network_policy && unsandboxed_execution_allowed(&file_system_sandbox_policy);
         let sandbox_override = if unsandboxed_allowed {
             sandbox_override_for_first_attempt(
-                tool.sandbox_permissions(req),
+                requested_sandbox_permissions,
                 &requirement,
                 &file_system_sandbox_policy,
             )

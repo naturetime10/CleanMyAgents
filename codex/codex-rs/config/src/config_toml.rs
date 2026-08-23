@@ -423,6 +423,10 @@ pub struct ConfigToml {
 
     /// Experimental / do not use. Selects the thread store implementation.
     pub experimental_thread_store: Option<ThreadStoreToml>,
+
+    /// Inline reference monitor ("guard layer") that reviews and records session
+    /// activity above the hook layer.
+    pub guardian: Option<GuardianToml>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, indexed, or live.
@@ -517,6 +521,23 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+/// Guard-layer settings, read from the `[guardian]` table.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct GuardianToml {
+    /// Which guardian implementation to run. Defaults to `off`.
+    pub mode: Option<GuardianModeToml>,
+}
+
+/// Guardian implementation selected by `[guardian] mode`.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianModeToml {
+    /// No guarding and no recording.
+    #[default]
+    Off,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

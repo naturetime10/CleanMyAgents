@@ -1,5 +1,9 @@
 //! Central approval policy-stage execution and reviewer routing.
 
+use codex_guardian::Activity;
+use codex_guardian::GuardedAction;
+use codex_guardian::Verdict;
+
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::GuardianReviewContext;
@@ -13,6 +17,7 @@ use crate::guardian::spawn_approval_request_review;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::guardian_tap;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
@@ -392,6 +397,8 @@ impl ApprovalReviewer {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ApprovalResolutionSource {
+    /// The guard layer, which decides above every other layer.
+    Guard,
     Hook,
     Guardian,
     User,
@@ -417,6 +424,7 @@ impl ApprovalResolution {
                 network_policy_amendment,
             } if network_policy_amendment.action == NetworkPolicyRuleAction::Deny => {
                 let rejection = match source {
+                    ApprovalResolutionSource::Guard => "rejected by the guardian",
                     ApprovalResolutionSource::Hook => "rejected by configuration",
                     ApprovalResolutionSource::Guardian => {
                         "automatic approval review denied the action"
@@ -452,36 +460,75 @@ impl Session {
         };
 
         // Approval precedence is:
-        // 0. Guard (codex-monitor) — see GUARD GATE below
+        // 0. Guard (the guardian) — GUARD GATE below, above every other layer
         // 1. Hooks
         // 2. If StrictAutoReview || Guardian enabled, then Guardian. Else, user.
-        // TODO(codex-monitor): GUARD GATE (above the hook layer). The guard is NOT a
-        // hook and sits above Hooks/Guardian/user. Call the monitor HERE, BEFORE
-        // `run_permission_request_hooks`, and if it returns Deny/Allow, short-circuit
-        // `resolution` with source Guard (FAIL-CLOSED on unreachable) so no hook or
-        // Guardian can override it; return None only to defer to the layers below.
-        let resolution = match run_permission_request_hooks(
+        //
+        // GUARD GATE: the guard is not a hook, so it is consulted before
+        // `run_permission_request_hooks` and short-circuits the resolution. A
+        // `Defer` verdict — including the fail-open posture of an observe-only
+        // guardian — falls through to the layers below.
+        let payload = action.permission_request_payload();
+        let guard_verdict = guardian_tap::review(
             self,
             ctx.review_context.turn(),
-            &permission_request_run_id,
-            action.permission_request_payload(),
+            GuardedAction::Approval {
+                tool_name: payload.tool_name.name().to_string(),
+                run_id: permission_request_run_id.clone(),
+                tool_input: payload.tool_input.clone(),
+            },
         )
-        .await
-        {
-            Some(PermissionRequestDecision::Allow) => ApprovalResolution {
+        .await;
+        let guard_resolution = match guard_verdict {
+            Verdict::Allow => Some(ApprovalResolution {
                 decision: ReviewDecision::Approved,
-                source: ApprovalResolutionSource::Hook,
+                source: ApprovalResolutionSource::Guard,
+            }),
+            Verdict::Deny { reason } => Some(ApprovalResolution {
+                decision: ReviewDecision::denied(reason),
+                source: ApprovalResolutionSource::Guard,
+            }),
+            // A rewrite has no meaning for an approval; treat it as no opinion.
+            Verdict::Rewrite { .. } | Verdict::Defer => None,
+        };
+
+        let resolution = match guard_resolution {
+            Some(resolution) => resolution,
+            None => match run_permission_request_hooks(
+                self,
+                ctx.review_context.turn(),
+                &permission_request_run_id,
+                payload,
+            )
+            .await
+            {
+                Some(PermissionRequestDecision::Allow) => ApprovalResolution {
+                    decision: ReviewDecision::Approved,
+                    source: ApprovalResolutionSource::Hook,
+                },
+                Some(PermissionRequestDecision::Deny { message }) => ApprovalResolution {
+                    decision: ReviewDecision::denied(message),
+                    source: ApprovalResolutionSource::Hook,
+                },
+                None => self.request_reviewer_approval(action, &ctx).await,
             },
-            Some(PermissionRequestDecision::Deny { message }) => ApprovalResolution {
-                decision: ReviewDecision::denied(message),
-                source: ApprovalResolutionSource::Hook,
-            },
-            None => self.request_reviewer_approval(action, &ctx).await,
         };
         // Network approvals record their final telemetry after validation and persistence.
         if !is_network_approval {
             record_resolution(&ctx, &resolution);
         }
+        // RECORDING TAP: who decided, and how.
+        guardian_tap::record(
+            self,
+            ctx.review_context.turn(),
+            Activity::ApprovalResolved {
+                tool_name: ctx.tool_name.to_string(),
+                call_id: ctx.call_id.clone(),
+                decision: format!("{:?}", resolution.decision),
+                source: format!("{:?}", resolution.source),
+            },
+        )
+        .await;
         if is_mcp_tool_call && resolution.decision == ReviewDecision::ApprovedMcpPolicyAmendment {
             return Ok(resolution.decision);
         }
@@ -779,7 +826,9 @@ impl Session {
 
 fn record_resolution(ctx: &ApprovalContext, resolution: &ApprovalResolution) {
     let source = match resolution.source {
-        ApprovalResolutionSource::Hook => ToolDecisionSource::Config,
+        ApprovalResolutionSource::Guard | ApprovalResolutionSource::Hook => {
+            ToolDecisionSource::Config
+        }
         ApprovalResolutionSource::Guardian => ToolDecisionSource::AutomatedReviewer,
         ApprovalResolutionSource::User => ToolDecisionSource::User,
     };
