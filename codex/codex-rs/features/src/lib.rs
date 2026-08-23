@@ -101,8 +101,10 @@ pub enum Feature {
     // Experimental
     /// Record model-attempted tool calls in internal Responses metadata.
     ExecutedToolCallMetadata,
-    /// Send per-message content annotations to the Responses endpoint. Turn off
-    /// against an endpoint that predates the field and rejects it outright.
+    /// Send per-message content annotations to the Responses endpoint. Off by
+    /// default: an endpoint that predates the field rejects the entire request
+    /// with `unknown_parameter`, so leaving it on breaks every turn. Turn it on
+    /// against an endpoint that accepts the field.
     ChatMessageMetadataPassthrough,
     /// Enable JavaScript code mode backed by the standalone host process.
     CodeMode,
@@ -912,7 +914,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ChatMessageMetadataPassthrough,
         key: "chat_message_metadata_passthrough",
         stage: Stage::Stable,
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CodeMode,

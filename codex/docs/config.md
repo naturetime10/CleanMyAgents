@@ -65,3 +65,19 @@ With `fail_closed = true` (the default), an unreachable guardian denies guarded
 actions, so a session started in `ipc` mode without a running guardian will have
 its tool calls blocked. Set `mode = "off"` or `fail_closed = false` to opt out of
 that posture.
+
+## Content annotations (`chat_message_metadata_passthrough`)
+
+Codex can attach per-message content annotations to each Responses request. A
+Responses endpoint that predates the field rejects the *entire* request with
+`unknown_parameter`, which fails every turn rather than degrading, so the
+feature is off by default:
+
+```toml
+[features]
+# Only turn this on against an endpoint that accepts the field.
+chat_message_metadata_passthrough = true
+```
+
+This is independent of `encrypted_function_args`, which is stripped for
+non-OpenAI providers regardless of this setting.
