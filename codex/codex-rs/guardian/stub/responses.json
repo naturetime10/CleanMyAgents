@@ -1,0 +1,90 @@
+{
+  "_comment": [
+    "Canned bodies for the guardian REST protocol, one per scenario name.",
+    "Pick one with `--scenario <name>`; `rules` (the default) is in the stub itself.",
+    "`review_id` and the pending `location` are filled in per request, so leave them out.",
+    "Verdict shapes mirror codex_guardian::Verdict, which is tagged on `decision`."
+  ],
+
+  "allow": {
+    "status": 201,
+    "body": { "status": "decided", "verdict": { "decision": "allow" } }
+  },
+
+  "deny": {
+    "status": 201,
+    "body": {
+      "status": "decided",
+      "verdict": { "decision": "deny", "reason": "denied by the stub backend" }
+    }
+  },
+
+  "rewrite": {
+    "status": 201,
+    "body": {
+      "status": "decided",
+      "verdict": {
+        "decision": "rewrite",
+        "payload": "[redacted by the stub backend]",
+        "note": "substituted the payload"
+      }
+    }
+  },
+
+  "defer": {
+    "status": 201,
+    "body": { "status": "decided", "verdict": { "decision": "defer" } }
+  },
+
+  "pending": {
+    "status": 202,
+    "headers": { "retry-after": "1" },
+    "body": { "status": "pending" },
+    "decides_to": { "decision": "allow" }
+  },
+
+  "unauthorized": {
+    "status": 401,
+    "contentType": "application/problem+json",
+    "body": {
+      "title": "Unauthorized",
+      "detail": "bearer token missing or wrong",
+      "guardian_error": "unavailable"
+    }
+  },
+
+  "unavailable": {
+    "status": 503,
+    "contentType": "application/problem+json",
+    "body": {
+      "title": "Service Unavailable",
+      "detail": "the stub backend is pretending to be down",
+      "guardian_error": "unavailable"
+    }
+  },
+
+  "timeout": {
+    "status": 504,
+    "contentType": "application/problem+json",
+    "body": {
+      "title": "Gateway Timeout",
+      "detail": "the stub backend is pretending to hang",
+      "guardian_error": "timeout"
+    }
+  },
+
+  "protocol": {
+    "status": 200,
+    "body": { "status": "decided" }
+  },
+
+  "throttled": {
+    "status": 429,
+    "contentType": "application/problem+json",
+    "body": {
+      "title": "Too Many Requests",
+      "detail": "the stub backend is shedding load",
+      "guardian_error": "unavailable"
+    }
+  }
+}

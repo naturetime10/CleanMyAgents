@@ -30,6 +30,7 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
+use codex_app_server_protocol::GuardianVerdictNotification;
 use codex_app_server_protocol::GuardianWarningNotification;
 use codex_app_server_protocol::HookCompletedNotification;
 use codex_app_server_protocol::HookStartedNotification;
@@ -267,6 +268,18 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::GuardianWarning(notification))
+                .await;
+        }
+        EventMsg::GuardianVerdict(verdict) => {
+            let notification = GuardianVerdictNotification {
+                thread_id: conversation_id.to_string(),
+                decision: verdict.decision,
+                action: verdict.action,
+                tool: verdict.tool,
+                reason: verdict.reason,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::GuardianVerdict(notification))
                 .await;
         }
         EventMsg::GuardianAssessment(assessment) => {

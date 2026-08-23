@@ -247,6 +247,7 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::Warning(_)
                     | EventMsg::GuardianWarning(_)
+                    | EventMsg::GuardianVerdict(_)
                     | EventMsg::ModelVerification(_)
                     | EventMsg::SafetyBuffering(_)
                     | EventMsg::TurnModerationMetadata(_) => {

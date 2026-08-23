@@ -1304,6 +1304,11 @@ pub enum EventMsg {
     /// Warning issued by the guardian automatic approval reviewer.
     GuardianWarning(WarningEvent),
 
+    /// A decision the guard layer reached about one action it was asked to
+    /// review. Emitted for the user's benefit: a guard that decides silently
+    /// is indistinguishable from one that is not running.
+    GuardianVerdict(GuardianVerdictEvent),
+
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
 
@@ -1960,6 +1965,30 @@ impl ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
+}
+
+/// What the guard decided. Mirrors `codex_guardian::Verdict` minus the payload,
+/// and minus `Defer`: a no-opinion verdict is not reported.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum GuardianDecision {
+    Allowed,
+    Denied,
+    Rewrote,
+}
+
+/// One guard decision, kept structured so the UI can style the decision rather
+/// than pattern-match a sentence.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct GuardianVerdictEvent {
+    pub decision: GuardianDecision,
+    /// What was reviewed, in the user's words: `prompt`, `tool call`, ...
+    pub action: String,
+    /// Tool or MCP server the action is about, when it has one.
+    pub tool: Option<String>,
+    /// The guard's justification, when it gave one.
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

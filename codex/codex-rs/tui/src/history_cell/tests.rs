@@ -3097,3 +3097,58 @@ fn session_header_omits_history_when_no_file_is_written() {
         "guarding off must not add a history row: {lines:?}"
     );
 }
+
+/// The decision is the part a reader scans for, so it has to carry the colour
+/// and the weight -- and the reason has to stay on its own line rather than
+/// being run into the headline.
+#[test]
+fn guardian_verdict_colours_the_decision_and_keeps_the_reason_separate() {
+    let cell = new_guardian_verdict_event(
+        GuardianDecision::Denied,
+        "tool call".to_string(),
+        Some("Bash".to_string()),
+        Some("destroys the working tree".to_string()),
+    );
+    let lines = cell.display_lines(80);
+
+    assert_eq!(lines.len(), 2);
+    let headline: Vec<&str> = lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(
+        headline,
+        vec!["• ", "Guardian ", "denied", " ", "tool call", " ", "Bash"]
+    );
+    assert_eq!(lines[0].spans[0].style.fg, Some(Color::Red));
+    assert_eq!(lines[0].spans[2].style.fg, Some(Color::Red));
+    assert!(
+        lines[0].spans[2]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+    assert_eq!(lines[0].spans[6].style.fg, Some(Color::Cyan));
+
+    assert_eq!(lines[1].spans[0].content.as_ref(), "  ");
+    assert!(lines[1].to_string().contains("destroys the working tree"));
+}
+
+/// An allow is a confirmation, not an intervention: same shape, quieter colour,
+/// and no reason line when the backend did not give one.
+#[test]
+fn an_allowed_verdict_is_one_green_line() {
+    let cell = new_guardian_verdict_event(
+        GuardianDecision::Allowed,
+        "prompt".to_string(),
+        None,
+        None,
+    );
+    let lines = cell.display_lines(80);
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].to_string(), "• Guardian allowed prompt");
+    assert_eq!(lines[0].spans[0].style.fg, Some(Color::Green));
+    assert_eq!(lines[0].spans[2].style.fg, Some(Color::Green));
+}

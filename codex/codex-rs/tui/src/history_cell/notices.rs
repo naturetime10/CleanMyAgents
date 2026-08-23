@@ -85,6 +85,44 @@ pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
+/// One guard decision, styled by what the guard decided.
+///
+/// A denial changes what ran and a rewrite changes what the model saw, so both
+/// have to read as interventions; an allow is a confirmation that the guard was
+/// consulted at all, so it stays quiet in green. The reason, when there is one,
+/// gets its own dimmed line rather than being run into the headline -- backends
+/// write sentences, and a sentence tacked onto a label buries the decision.
+pub(crate) fn new_guardian_verdict_event(
+    decision: GuardianDecision,
+    action: String,
+    tool: Option<String>,
+    reason: Option<String>,
+) -> PrefixedWrappedHistoryCell {
+    let (label, color) = match decision {
+        GuardianDecision::Allowed => ("allowed", Color::Green),
+        GuardianDecision::Denied => ("denied", Color::Red),
+        GuardianDecision::Rewrote => ("rewrote", Color::Yellow),
+    };
+
+    let mut headline: Vec<Span<'static>> = vec![
+        "Guardian ".dim(),
+        label.fg(color).bold(),
+        " ".into(),
+        action.into(),
+    ];
+    if let Some(tool) = tool {
+        headline.push(" ".into());
+        headline.push(tool.cyan());
+    }
+
+    let mut lines = vec![Line::from(headline)];
+    if let Some(reason) = reason {
+        lines.push(Line::from(reason.dim()));
+    }
+
+    PrefixedWrappedHistoryCell::new(Text::from(lines), "• ".fg(color).bold(), "  ")
+}
+
 #[derive(Debug)]
 pub(crate) struct SafetyAccessBlockCell {
     body: &'static str,

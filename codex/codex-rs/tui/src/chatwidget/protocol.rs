@@ -161,6 +161,9 @@ impl ChatWidget {
                     self.on_warning(notification.message);
                 }
             }
+            ServerNotification::GuardianVerdict(notification) => {
+                self.on_guardian_verdict(notification)
+            }
             ServerNotification::StrictReviewRequired(_) => {
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::new_warning_event(
