@@ -36,6 +36,13 @@ file-search *args:
 code-mode-host *args:
     cargo run --bin codex-code-mode-host -- {args}
 
+# Build the code-mode host against Codex's sandboxed V8 release artifacts.
+# `rusty_v8` publishes no `ptrcomp_sandbox` prebuilt, so a plain cargo build of
+# this crate cannot resolve V8 on its own.
+[no-cd]
+build-code-mode-host *args:
+    {{ python }} {{ justfile_directory() }}/scripts/build_code_mode_host.py {args}
+
 # Assemble a local Codex package.
 [no-cd]
 assemble-codex-package *args:

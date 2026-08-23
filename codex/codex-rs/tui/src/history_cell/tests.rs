@@ -684,6 +684,10 @@ async fn session_info_uses_availability_nux_tooltip_override() {
 async fn session_info_availability_nux_tooltip_snapshot() {
     let mut config = test_config().await;
     config.cwd = test_path_buf("/tmp/project").abs();
+    // This snapshot is about the tooltip. Recording is on by default in a
+    // debug build, and its directory sits under a per-run temporary codex
+    // home, so leaving it on would bake an unstable path into the snapshot.
+    config.guardian.mode = codex_guardian::GuardianMode::Off;
     let cell = new_session_info(
         &config,
         "gpt-5",
@@ -3044,5 +3048,52 @@ fn consolidation_walker_replaces_agent_message_cells() {
     assert!(
         transcript_cells[1].as_any().is::<AgentMarkdownCell>(),
         "second cell should be AgentMarkdownCell"
+    );
+}
+
+#[test]
+fn session_header_shows_the_history_file_when_one_is_being_written() {
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-5.6-sol".to_string(),
+        None,
+        /*show_fast_status*/ false,
+        PathBuf::from("/repo"),
+        "test",
+    )
+    .with_history_path(Some(PathBuf::from("/home/u/.codex/guardian/debug/abc.csv")));
+
+    let lines = render_lines(&cell.display_lines(/*width*/ 80));
+    let history_line = lines
+        .iter()
+        .find(|line| line.contains("history:"))
+        .expect("history line");
+
+    // The box shows the directory; the file name is the thread id and would
+    // crowd out the part a reader can act on.
+    assert!(history_line.contains("history:   /home/u/.codex/guardian/debug"));
+
+    // The full path survives on the copyable transcript line.
+    let raw = render_lines(&cell.raw_lines());
+    assert!(
+        raw.iter()
+            .any(|line| line == "history: /home/u/.codex/guardian/debug/abc.csv"),
+        "raw lines should carry the full path: {raw:?}"
+    );
+}
+
+#[test]
+fn session_header_omits_history_when_no_file_is_written() {
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-5.6-sol".to_string(),
+        None,
+        /*show_fast_status*/ false,
+        PathBuf::from("/repo"),
+        "test",
+    );
+
+    let lines = render_lines(&cell.display_lines(/*width*/ 80));
+    assert!(
+        !lines.iter().any(|line| line.contains("history:")),
+        "guarding off must not add a history row: {lines:?}"
     );
 }

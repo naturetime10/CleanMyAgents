@@ -1531,6 +1531,7 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
         config
             .features
             .enabled(Feature::ConcurrentReasoningSummaries),
+        /*send_chat_message_metadata_passthrough*/ true,
         /*attestation_provider*/ None,
         config.http_client_factory(),
     );
@@ -3013,6 +3014,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*send_chat_message_metadata_passthrough*/ true,
         /*attestation_provider*/ None,
         config.http_client_factory(),
     );

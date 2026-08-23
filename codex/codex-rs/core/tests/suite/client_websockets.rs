@@ -2521,6 +2521,7 @@ async fn websocket_harness_with_provider_options_and_auth(
         config
             .features
             .enabled(Feature::ConcurrentReasoningSummaries),
+        /*send_chat_message_metadata_passthrough*/ true,
         /*attestation_provider*/ None,
         http_client_factory,
     );

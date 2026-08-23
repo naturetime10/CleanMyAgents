@@ -687,6 +687,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*send_chat_message_metadata_passthrough*/ true,
         /*attestation_provider*/ None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )
@@ -5988,6 +5989,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config
                 .features
                 .enabled(Feature::ConcurrentReasoningSummaries),
+            /*send_chat_message_metadata_passthrough*/ true,
             /*attestation_provider*/ None,
             config.http_client_factory(),
         ),
@@ -8199,6 +8201,7 @@ where
             config
                 .features
                 .enabled(Feature::ConcurrentReasoningSummaries),
+            /*send_chat_message_metadata_passthrough*/ true,
             /*attestation_provider*/ None,
             config.http_client_factory(),
         ),

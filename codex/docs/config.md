@@ -26,9 +26,10 @@ context-window occupancy.
 
 ```toml
 [guardian]
-# off (default) | csv | ipc | both
+# off | csv | ipc | both
+# Default: csv for a debug build, off for a release build.
 mode = "csv"
-# Per-session CSV history. Default: $CODEX_HOME/guardian/debug
+# Per-session history. Default: $CODEX_HOME/guardian/debug
 debug_dir = "/Users/me/.codex/guardian/debug"
 # Socket of the resident guardian process. Default: $CODEX_HOME/guardian/guardian.sock
 socket_path = "/Users/me/.codex/guardian/guardian.sock"
@@ -40,13 +41,25 @@ request_timeout_ms = 3000
 
 - `csv` writes one CSV file per session, `<debug_dir>/<thread_id>.csv`, with a
   fixed header and one row per guarded action and recorded activity. It never
-  denies anything; it is a debugging and audit record.
+  denies anything; it is a debugging and audit record. Beside each file sits a
+  `<thread_id>.meta.yml` sidecar holding everything constant for that session —
+  the session it belongs to, the account, the model, the originator, the
+  starting directory, and running totals. Those are deliberately not columns,
+  so grouping sidecars by `session_id` reassembles a run that spawned
+  sub-agents without opening a single history file. The TUI session header
+  names the directory whenever a mode that records is active.
 - `ipc` delegates every decision to a resident local process listening on
   `socket_path`, exchanging newline-delimited JSON: the request carries the
   session context plus the action, and the reply carries a verdict of `allow`,
   `deny`, `rewrite`, or `defer`. `rewrite` replaces a prompt, a tool input, or a
   tool result; `defer` falls through to the layers below.
 - `both` records locally and enforces through the resident process.
+
+A build from source records by default so that a session run while debugging
+leaves a trail without having been configured in advance. Released binaries
+default to `off`: writing every prompt and tool result to disk is opt-in. Files
+are written `0600` inside a `0700` directory, but they do contain prompt text
+and tool output, so treat the directory as sensitive.
 
 With `fail_closed = true` (the default), an unreachable guardian denies guarded
 actions, so a session started in `ipc` mode without a running guardian will have

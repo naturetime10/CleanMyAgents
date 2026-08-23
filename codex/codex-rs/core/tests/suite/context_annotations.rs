@@ -132,3 +132,50 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
 
     Ok(())
 }
+
+/// The annotations are the newest thing on the request, so an endpoint that
+/// predates them rejects the whole call. Turning the feature off has to strip
+/// them from every item, not just the ones the model produced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disabling_the_feature_sends_no_content_annotations() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::ChatMessageMetadataPassthrough)
+                .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "inspect world state".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let carries_annotations = response
+        .single_request()
+        .input()
+        .into_iter()
+        .any(|item| !item["internal_chat_message_metadata_passthrough"].is_null());
+    assert!(
+        !carries_annotations,
+        "no request item should carry the passthrough once the feature is off"
+    );
+
+    Ok(())
+}

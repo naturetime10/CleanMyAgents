@@ -20,11 +20,10 @@ pub const DEBUG_DIR: &str = "debug";
 pub const SOCKET_FILE: &str = "guardian.sock";
 
 /// Which guardian implementation a session runs with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianMode {
     /// No guarding and no recording.
-    #[default]
     Off,
     /// Local history only: append every activity to a per-session CSV file.
     Csv,
@@ -32,6 +31,20 @@ pub enum GuardianMode {
     Ipc,
     /// Both: record locally *and* enforce through the resident process.
     Both,
+}
+
+impl Default for GuardianMode {
+    /// Debug builds record local history without being asked, so a developer
+    /// running from source has a session trail to read after the fact. Release
+    /// builds stay off: recording every prompt and tool result to disk is not
+    /// something a shipped binary should start doing on its own.
+    fn default() -> Self {
+        if cfg!(debug_assertions) {
+            Self::Csv
+        } else {
+            Self::Off
+        }
+    }
 }
 
 /// Guard-layer settings, read from the `[guardian]` table of `config.toml`.
@@ -52,7 +65,7 @@ pub struct GuardianConfig {
 impl Default for GuardianConfig {
     fn default() -> Self {
         Self {
-            mode: GuardianMode::Off,
+            mode: GuardianMode::default(),
             debug_dir: None,
             socket_path: None,
             fail_closed: true,
@@ -99,5 +112,92 @@ pub fn guardian_from_config(config: &GuardianConfig, codex_home: &Path) -> Arc<d
                 config.fail_closed,
             )),
         ])),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FailurePosture;
+
+    /// Every mode has to select an implementation, and the recording-only one
+    /// must not start failing actions closed just because it is composed with
+    /// an enforcing guardian.
+    #[tokio::test]
+    async fn each_mode_selects_an_implementation_with_the_right_posture() {
+        let codex_home = std::path::Path::new("/codex-home");
+        let cases = [
+            (
+                GuardianMode::Off,
+                /*enabled*/ false,
+                FailurePosture::FailOpen,
+            ),
+            (
+                GuardianMode::Csv,
+                /*enabled*/ true,
+                FailurePosture::FailOpen,
+            ),
+            (
+                GuardianMode::Ipc,
+                /*enabled*/ true,
+                FailurePosture::FailClosed,
+            ),
+            // Composed: recording alone fails open, but the enforcing half
+            // decides the posture for the pair.
+            (
+                GuardianMode::Both,
+                /*enabled*/ true,
+                FailurePosture::FailClosed,
+            ),
+        ];
+        for (mode, enabled, posture) in cases {
+            let config = GuardianConfig {
+                mode,
+                ..GuardianConfig::default()
+            };
+            let guardian = guardian_from_config(&config, codex_home);
+            assert_eq!(guardian.is_enabled(), enabled, "{mode:?}");
+            assert_eq!(guardian.failure_posture(), posture, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn paths_fall_back_to_codex_home_and_honour_overrides() {
+        let codex_home = std::path::Path::new("/codex-home");
+        let defaults = GuardianConfig::default();
+        assert_eq!(
+            defaults.debug_dir(codex_home),
+            codex_home.join(GUARDIAN_DIR).join(DEBUG_DIR)
+        );
+        assert_eq!(
+            defaults.socket_path(codex_home),
+            codex_home.join(GUARDIAN_DIR).join(SOCKET_FILE)
+        );
+
+        let overridden = GuardianConfig {
+            debug_dir: Some(PathBuf::from("/elsewhere/history")),
+            socket_path: Some(PathBuf::from("/elsewhere/guard.sock")),
+            ..GuardianConfig::default()
+        };
+        assert_eq!(
+            overridden.debug_dir(codex_home),
+            PathBuf::from("/elsewhere/history")
+        );
+        assert_eq!(
+            overridden.socket_path(codex_home),
+            PathBuf::from("/elsewhere/guard.sock")
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_debug_build_records_local_history_by_default() {
+        assert_eq!(GuardianConfig::default().mode, GuardianMode::Csv);
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn a_release_build_stays_off_by_default() {
+        assert_eq!(GuardianConfig::default().mode, GuardianMode::Off);
     }
 }

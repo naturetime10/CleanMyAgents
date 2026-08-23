@@ -1456,6 +1456,10 @@ impl Session {
                     /*concurrent_reasoning_summaries_enabled*/ config
                         .features
                         .enabled(Feature::ConcurrentReasoningSummaries),
+                    /*send_chat_message_metadata_passthrough*/
+                    config
+                        .features
+                        .enabled(Feature::ChatMessageMetadataPassthrough),
                     attestation_provider,
                     config.http_client_factory(),
                 )
