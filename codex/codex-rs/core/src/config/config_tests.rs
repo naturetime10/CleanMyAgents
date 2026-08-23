@@ -21,6 +21,9 @@ use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
+use codex_config::config_toml::GuardianModeToml;
+use codex_guardian::GuardianMode;
+use codex_config::config_toml::GuardianToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
@@ -8060,6 +8063,108 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
     assert_eq!(
         config.guardian_policy_config.as_deref(),
         Some("Use the workspace-managed guardian policy.")
+    );
+
+    Ok(())
+}
+
+/// The REST guard is the one mode that sends session content off the machine,
+/// so the fields that point it somewhere have to survive the `[guardian]`
+/// table verbatim.
+#[test]
+fn config_toml_deserializes_the_guardian_rest_backend() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[guardian]
+mode = "api"
+endpoint = "https://guardian.example/api"
+api_key_env = "CODEX_GUARDIAN_TOKEN"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let guardian = cfg.guardian.expect("guardian table");
+    assert_eq!(guardian.mode, Some(GuardianModeToml::Api));
+    assert_eq!(
+        guardian.endpoint.as_deref(),
+        Some("https://guardian.example/api")
+    );
+    assert_eq!(
+        guardian.api_key_env.as_deref(),
+        Some("CODEX_GUARDIAN_TOKEN")
+    );
+}
+
+/// A guard that cannot reach its backend denies everything, so an endpoint that
+/// can never work has to be refused while config loads rather than discovered
+/// one blocked tool call at a time.
+#[tokio::test]
+async fn load_config_rejects_an_unusable_guardian_endpoint() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        guardian: Some(GuardianToml {
+            mode: Some(GuardianModeToml::Api),
+            endpoint: Some("guardian.example".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        AbsolutePathBuf::try_from(codex_home.path().to_path_buf()).expect("absolute path"),
+    )
+    .await
+    .expect_err("an endpoint that is not a URL must not load");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    Ok(())
+}
+
+/// A session with no `[guardian]` table at all still delegates, and to a
+/// loopback address: the default may not send prompts off the machine.
+#[tokio::test]
+async fn guardian_defaults_to_the_local_backend() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        AbsolutePathBuf::try_from(codex_home.path().to_path_buf()).expect("absolute path"),
+    )
+    .await?;
+
+    assert_eq!(config.guardian.mode, GuardianMode::Api);
+    assert_eq!(
+        config.guardian.endpoint.as_deref(),
+        Some("http://127.0.0.1:4500/guardian")
+    );
+    assert!(config.guardian.fail_closed);
+
+    Ok(())
+}
+
+/// `mode = "api"` on its own is a complete configuration: the endpoint falls
+/// back to the same loopback default rather than failing the load.
+#[tokio::test]
+async fn guardian_api_mode_without_an_endpoint_uses_the_default() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        guardian: Some(GuardianToml {
+            mode: Some(GuardianModeToml::Api),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        AbsolutePathBuf::try_from(codex_home.path().to_path_buf()).expect("absolute path"),
+    )
+    .await?;
+
+    assert_eq!(
+        config.guardian.endpoint.as_deref(),
+        Some("http://127.0.0.1:4500/guardian")
     );
 
     Ok(())

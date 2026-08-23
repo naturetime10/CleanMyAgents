@@ -14,8 +14,11 @@
 //!   [`SessionMeta`] sidecar that says which session the file belongs to.
 //! * [`IpcGuardian`] — relays every event to a resident local monitor process
 //!   over a Unix domain socket and enforces the verdict it returns.
+//! * [`ApiGuardian`] — relays every event to an HTTP backend over the REST
+//!   protocol and enforces the verdict it returns.
 //! * [`FanOutGuardian`] — composes several of the above.
 
+mod api;
 mod config;
 mod csv_history;
 mod event;
@@ -27,9 +30,13 @@ mod row;
 mod session_meta;
 mod verdict;
 
+pub use api::ApiEndpoint;
+pub use api::ApiEndpointError;
+pub use api::ApiGuardian;
 pub use config::DEBUG_DIR;
 pub use config::GUARDIAN_DIR;
 pub use config::GuardianConfig;
+pub use config::GuardianConfigError;
 pub use config::GuardianMode;
 pub use config::SOCKET_FILE;
 pub use config::guardian_from_config;

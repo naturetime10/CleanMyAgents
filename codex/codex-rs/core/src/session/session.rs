@@ -1380,6 +1380,7 @@ impl Session {
             let guardian = codex_guardian::guardian_from_config(
                 &config.guardian,
                 config.codex_home.as_path(),
+                &config.http_client_factory(),
             );
             let guardian_identity = GuardianIdentity {
                 originator: session_configuration.originator.clone(),

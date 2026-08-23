@@ -1413,6 +1413,13 @@
             "both"
           ],
           "type": "string"
+        },
+        {
+          "description": "Delegate every decision to the HTTP backend named by `endpoint`, which defaults to a loopback address. The default mode.\n\nEvery guarded action and recorded activity carries prompt text and tool output, so pointing `endpoint` at a remote host sends session content off the machine.",
+          "enum": [
+            "api"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1420,6 +1427,10 @@
       "additionalProperties": false,
       "description": "Guard-layer settings, read from the `[guardian]` table.",
       "properties": {
+        "api_key_env": {
+          "description": "Name of the environment variable holding the bearer token for `endpoint`. The token itself is not a config field on purpose: a credential written into `config.toml` outlives the session that needed it.",
+          "type": "string"
+        },
         "debug_dir": {
           "allOf": [
             {
@@ -1427,6 +1438,10 @@
             }
           ],
           "description": "Directory holding the per-session CSV history. Defaults to `$CODEX_HOME/guardian/debug`."
+        },
+        "endpoint": {
+          "description": "Base URL of the REST backend, e.g. `https://guardian.example/api`. Required by `mode = \"api\"` and ignored by every other mode.",
+          "type": "string"
         },
         "fail_closed": {
           "description": "Deny guarded actions when the guardian cannot be reached. Defaults to true: a guard that fails open is not a guard.",

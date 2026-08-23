@@ -24,15 +24,23 @@ Precedence at a choke point is Guard → Hooks → automated review → user. It
 records session activity that hooks never see, such as token usage and live
 context-window occupancy.
 
+A fully commented sample of every key, with its default, is checked in at
+[`codex-rs/guardian/config.example.toml`](../codex-rs/guardian/config.example.toml).
+
 ```toml
 [guardian]
-# off | csv | ipc | both
-# Default: csv for a debug build, off for a release build.
-mode = "csv"
+# off | csv | ipc | both | api
+# Default: api, pointed at the loopback endpoint below.
+mode = "api"
 # Per-session history. Default: $CODEX_HOME/guardian/debug
 debug_dir = "/Users/me/.codex/guardian/debug"
 # Socket of the resident guardian process. Default: $CODEX_HOME/guardian/guardian.sock
 socket_path = "/Users/me/.codex/guardian/guardian.sock"
+# Base URL of the REST backend, used by mode = "api", ignored otherwise.
+# Default: http://127.0.0.1:4500/guardian
+endpoint = "http://127.0.0.1:4500/guardian"
+# Environment variable holding the bearer token for `endpoint`. Optional.
+api_key_env = "CODEX_GUARDIAN_TOKEN"
 # Deny guarded actions when the guardian cannot be reached. Default: true
 fail_closed = true
 # Deadline for one round trip to the guardian process. Default: 3000
@@ -54,17 +62,87 @@ request_timeout_ms = 3000
   `deny`, `rewrite`, or `defer`. `rewrite` replaces a prompt, a tool input, or a
   tool result; `defer` falls through to the layers below.
 - `both` records locally and enforces through the resident process.
+- `api` delegates every decision to the HTTP backend at `endpoint`, over the
+  REST protocol described below. Composing it with local history is not a mode
+  yet; pick one or the other.
 
-A build from source records by default so that a session run while debugging
-leaves a trail without having been configured in advance. Released binaries
-default to `off`: writing every prompt and tool result to disk is opt-in. Files
-are written `0600` inside a `0700` directory, but they do contain prompt text
-and tool output, so treat the directory as sensitive.
+### The REST protocol (`mode = "api"`)
+
+Two endpoints carry the whole guard protocol, one per half of the guard trait.
+
+`POST {endpoint}/v1/reviews` submits one guarded action and returns the verdict:
+
+```jsonc
+// request
+{ "context": { "thread_id": "…", "session_id": "…", "turn_id": "…", "cwd": "…",
+               "model": "…", "originator": "…", "account": "…", "timestamp": "…" },
+  "action":  { "action": "tool_call", "tool_name": "Bash", "call_id": "…",
+               "matcher_aliases": [], "tool_input": { … } } }
+
+// 200 / 201 response
+{ "review_id": "rev_…", "status": "decided",
+  "verdict": { "decision": "deny", "reason": "destroys the working tree" } }
+```
+
+`verdict` is one of `allow`, `deny` (with `reason`), `rewrite` (with `payload`
+and an optional `note`), or `defer`. Every request carries an
+`Idempotency-Key` of `{thread_id}/{turn_id}/{action}/{call_id}`: a retry after a
+client-side timeout must return the verdict already recorded, never a fresh
+decision.
+
+A backend that needs a human to decide answers `202 Accepted` with
+`status: "pending"`, a `Location`, and optionally a `Retry-After` in seconds.
+Codex polls that URL until the review is `decided` or the request deadline
+expires. It never treats a pending review as permission: on a tool-call gate
+`defer` is indistinguishable from `allow`, so an approval nobody answers has to
+expire into the fail posture instead.
+
+`POST {endpoint}/v1/activities` reports what already happened, always as a
+batch and always answered without a body:
+
+```jsonc
+{ "items": [ { "context": { … }, "activity": { "activity": "token_usage",
+                                               "total_tokens": 15, … } } ] }
+```
+
+Recording is log-only. It runs on a background task, coalesces whatever is
+queued into one request, and drops records rather than letting a slow backend
+stall a turn.
+
+Failures never become verdicts. `504` and a client-side deadline are a timeout;
+`401`, `403`, `429`, and `5xx` mean unavailable; anything else unparseable is a
+protocol error. All three reach `fail_closed`, so an unknown action kind must be
+rejected with `422` rather than admitted — a guard that silently allows what it
+does not understand is not a guard. A backend may name the variant itself with a
+`guardian_error` field of `unavailable`, `timeout`, or `protocol` in an RFC 9457
+`application/problem+json` body.
+
+Reads — sessions, threads, history — are deliberately not part of this. They
+belong to whatever renders a session, not to the guard a turn runs through.
+
+`api` is the default mode, pointed at `http://127.0.0.1:4500/guardian`, so a
+session delegates to a monitor as soon as one is running on this machine and
+needs no configuration to do it. The default endpoint is loopback on purpose:
+guarded actions carry prompt text and tool output, and the out-of-the-box
+configuration must not send that anywhere but this machine.
+
+In `csv` mode, files are written `0600` inside a `0700` directory, but they do
+contain prompt text and tool output, so treat the directory as sensitive.
 
 With `fail_closed = true` (the default), an unreachable guardian denies guarded
-actions, so a session started in `ipc` mode without a running guardian will have
-its tool calls blocked. Set `mode = "off"` or `fail_closed = false` to opt out of
-that posture.
+actions, so a session started in `ipc` or `api` mode without a reachable
+guardian will have its tool calls blocked. Set `mode = "off"` or
+`fail_closed = false` to opt out of that posture.
+
+Because `api` is the default and `fail_closed` defaults to `true`, a session
+started with nothing listening on the endpoint has its guarded tool calls
+denied. Set `mode = "off"` or `fail_closed = false` while no backend is running.
+
+Pointing `endpoint` at a remote host sends prompt text and tool output off the
+machine, so that is something to do deliberately. Put the bearer token in the
+environment variable named by `api_key_env` rather than in `config.toml`, where
+a credential outlives the session that needed it. An `endpoint` that is not a
+URL is rejected when config loads, not at the first choke point.
 
 ## Content annotations (`chat_message_metadata_passthrough`)
 

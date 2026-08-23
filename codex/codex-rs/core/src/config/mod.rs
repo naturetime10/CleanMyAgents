@@ -2406,29 +2406,44 @@ fn resolve_tool_suggest_config_from_config(
 }
 
 /// Maps the `[guardian]` table onto the guard layer's own config type.
-fn guardian_config(guardian: Option<GuardianToml>) -> GuardianConfig {
+///
+/// A mode missing something it needs -- `api` without an endpoint, say -- is
+/// rejected here rather than at the first choke point, so a fail-closed
+/// deployment does not start out denying every action for an unexplained
+/// reason.
+fn guardian_config(guardian: Option<GuardianToml>) -> std::io::Result<GuardianConfig> {
     let defaults = GuardianConfig::default();
     let Some(guardian) = guardian else {
-        return defaults;
+        return Ok(defaults);
     };
-    GuardianConfig {
-        // An absent `mode` falls back to the build's default rather than to
-        // `GuardianModeToml`'s, whose derived default is baked into the
-        // published config schema and cannot vary by profile.
+    let config = GuardianConfig {
+        // An absent `mode` falls back to the guard layer's own default, which
+        // `GuardianModeToml`'s derived default mirrors so the published config
+        // schema advertises the same thing.
         mode: guardian.mode.map_or(defaults.mode, |mode| match mode {
             GuardianModeToml::Off => GuardianMode::Off,
             GuardianModeToml::Csv => GuardianMode::Csv,
             GuardianModeToml::Ipc => GuardianMode::Ipc,
             GuardianModeToml::Both => GuardianMode::Both,
+            GuardianModeToml::Api => GuardianMode::Api,
         }),
         debug_dir: guardian.debug_dir.map(AbsolutePathBuf::into_path_buf),
         socket_path: guardian.socket_path.map(AbsolutePathBuf::into_path_buf),
+        // An `api` mode that names no endpoint still has one: the default is a
+        // loopback address, so a monitor running on this machine is picked up
+        // without being configured.
+        endpoint: guardian.endpoint.or(defaults.endpoint),
+        api_key_env: guardian.api_key_env,
         fail_closed: guardian.fail_closed.unwrap_or(defaults.fail_closed),
         request_timeout: guardian
             .request_timeout_ms
             .map(Duration::from_millis)
             .unwrap_or(defaults.request_timeout),
-    }
+    };
+    config
+        .validate()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.to_string()))?;
+    Ok(config)
 }
 
 fn thread_store_config(thread_store: Option<ThreadStoreToml>) -> ThreadStoreConfig {
@@ -4287,7 +4302,7 @@ impl Config {
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             experimental_thread_store: thread_store_config(cfg.experimental_thread_store),
-            guardian: guardian_config(cfg.guardian),
+            guardian: guardian_config(cfg.guardian)?,
             forced_chatgpt_workspace_id,
             forced_login_method,
             web_search_mode: constrained_web_search_mode.value,
