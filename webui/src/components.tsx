@@ -2,6 +2,8 @@ import { useRef, useState, type ReactNode } from "react";
 import type { DailyPoint } from "./types";
 
 export const ICON = {
+  // Radar sweep: outer dial plus a quarter wedge.
+  scan: "M12 3a9 9 0 100 18 9 9 0 000-18z M12 12V3a9 9 0 019 9z",
   analytics: "M3 3v18h18M7 15l4-5 3 3 5-7",
   injectors: "M12 2v6m0 8v6M2 12h6m8 0h6M6 6l3 3m6 6l3 3m0-12l-3 3M9 15l-3 3",
   mcp: "M4 7h16M4 12h16M4 17h10",

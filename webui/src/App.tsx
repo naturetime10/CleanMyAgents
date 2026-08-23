@@ -3,12 +3,13 @@ import { useSnapshot } from "./api";
 import { Icon } from "./components";
 import { Analytics, Efficiency, Findings, Mcp, VIEWS, type ViewId } from "./views";
 import Hooks from "./hooks/Hooks";
+import Scan from "./scan/Scan";
 import Trajectory from "./trajectory/Trajectory";
 import "./theme.css";
 
 const readHash = (): ViewId => {
   const h = location.hash.slice(1) as ViewId;
-  return VIEWS.some((v) => v.id === h) ? h : "overview";
+  return VIEWS.some((v) => v.id === h) ? h : "scan";
 };
 
 export default function App() {
@@ -53,7 +54,9 @@ export default function App() {
       </nav>
 
       <div className={tab === "sessions" ? "page page-bleed" : "page"}>
-        {tab === "sessions" ? <Trajectory /> : !snapshot ? (
+        {/* Scan and Trajectory run on their own data, so neither waits on the backend. */}
+        {tab === "scan" ? <Scan />
+          : tab === "sessions" ? <Trajectory /> : !snapshot ? (
           <div className="loading">{error ? "Waiting for the backend…" : "Loading…"}</div>
         ) : tab === "injectors" ? <Hooks />
           : tab === "mcp" ? <Mcp s={snapshot} sel={sel} setSel={setSel} reload={reload} />
