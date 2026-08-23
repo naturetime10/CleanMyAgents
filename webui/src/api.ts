@@ -13,14 +13,19 @@ export function useSnapshot() {
       if (!res.ok) throw new Error(`snapshot ${res.status}`);
       setSnapshot(await res.json());
       setError(null);
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   };
 
   useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), POLL_MS);
+    // Poll only once something answers. Nothing serves /snapshot today, and a
+    // request every 15s forever is a console full of failures describing a
+    // situation that will not change on its own.
+    let t = 0;
+    void load().then((ok) => { if (ok) t = setInterval(() => void load(), POLL_MS); });
     return () => clearInterval(t);
   }, []);
 
