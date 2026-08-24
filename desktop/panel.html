@@ -54,14 +54,16 @@
   footer .open { flex: 1; text-align: center; font-weight: 600; font-size: 14px; cursor: pointer; }
   footer .open:active { opacity: .7; }
   .empty { color: #b6a9d9; padding: 8px 2px; }
+  .note { color: #9a8bb3; font-size: 11px; padding: 2px 2px 8px; }
 </style>
 </head>
 <body>
-  <div class="wrap" id="wrap"><div class="empty">Connecting…</div></div>
-  <footer><span class="open" onclick="window.open('http://127.0.0.1:4490/')">Open CleanMyAgent</span></footer>
+  <div class="wrap" id="wrap"><div class="empty">Loading…</div></div>
+  <footer><span class="open" onclick="open_('')">Open CleanMyAgent</span></footer>
 <script>
 // palette validated for dark surface #2a1e4f (dataviz six-checks): cyan=active, amber=wasted
 const ACTIVE = "#1697b8", WASTED = "#bd8228";
+const open_ = (hash) => window.open(`http://127.0.0.1:4490/${hash}`);
 const fmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
 
 function gauge(frac, label) {
@@ -77,35 +79,38 @@ function gauge(frac, label) {
 }
 
 function render(s) {
-  const findings = s.audit?.findings?.length ?? 0;
-  const untrusted = s.hooks.filter(h => h.trustStatus !== "trusted").length;
-  const healthy = findings === 0 && untrusted === 0;
-  const total = s.budget?.totalTokens ?? 0;
-  const wasted = s.budget?.wastedTokens ?? 0;
-  const rec = (s.recommendations ?? [])[0];
-  const per = (s.budget?.perServer ?? []).filter(r => r.enabled && r.tokens > 0)
-    .sort((a, b) => b.tokens - a.tokens);
-  const max = per[0]?.tokens || 1;
+  const L = s.local ?? {};
+  const ops = s.ops ?? null;
 
-  document.getElementById("wrap").innerHTML = `
-    <h1>Agent Health: <span class="status ${healthy ? "" : "warn"}">${healthy ? "Good" : "Attention"}</span></h1>
-    <div class="sub">Codex harness · ${s.stats.sessions} sessions</div>
+  const findings = ops?.audit?.findings?.length ?? 0;
+  const untrusted = (ops?.hooks ?? []).filter(h => h.trustStatus !== "trusted").length;
+  const blocked = L.blocked ?? 0;
+  const healthy = findings === 0 && untrusted === 0 && blocked === 0;
 
-    <div class="card">
-      <div class="protect">
-        <span class="shield ${healthy ? "" : "warn"}">${healthy ? "✓" : "!"}</span>
-        Hook audit — ${s.hooks.length} watched
-        <span class="ok">${healthy ? "✓ Protected" : `${findings} findings · ${untrusted} untrusted`}</span>
-      </div>
-    </div>
+  const reviewed = L.reviewed ?? 0, challenged = L.challenged ?? 0;
+  const gateNote = healthy ? "✓ Protected"
+    : [findings && `${findings} findings`, untrusted && `${untrusted} untrusted`,
+       blocked && `${blocked} blocked`].filter(Boolean).join(" · ");
 
+  // recent session logs, longest first — the same lane language the MCP card uses
+  const recent = (L.recent ?? []).slice().sort((a, b) => b.bytes - a.bytes);
+  const recentMax = recent[0]?.bytes || 1;
+
+  const opsCards = () => {
+    const total = ops.budget?.totalTokens ?? 0;
+    const wasted = ops.budget?.wastedTokens ?? 0;
+    const rec = (ops.recommendations ?? [])[0];
+    const per = (ops.budget?.perServer ?? []).filter(r => r.enabled && r.tokens > 0)
+      .sort((a, b) => b.tokens - a.tokens);
+    const max = per[0]?.tokens || 1;
+    return `
     <div class="row">
       <div class="card" style="flex:0 0 132px">
         ${gauge(total ? wasted / total : 0, "wasted")}
         <div class="gauge-cap">Context · ${fmt(total)} tok</div>
       </div>
       <div class="card">
-        <div class="h2">MCP channels <span class="action" onclick="window.open('http://127.0.0.1:4490/')">Free Up</span></div>
+        <div class="h2">MCP channels <span class="action" onclick="open_('#mcp')">Free Up</span></div>
         ${per.map(r => `
           <div class="lane" title="${r.server}: ${r.tokens.toLocaleString()} tokens, ${r.calls} calls">
             <span class="name">${r.server}</span>
@@ -122,9 +127,42 @@ function render(s) {
 
     <div class="card rec">${rec ? `
       <div class="body"><b>Disable ${rec.server}</b> — ${rec.reason}, saves ${fmt(rec.savesTokens)} tok</div>
-      <span class="btn" onclick="window.open('http://127.0.0.1:4490/')">Review</span>` : `
+      <span class="btn" onclick="open_('#mcp')">Review</span>` : `
       <div class="body">Nothing to clean up right now.</div>`}
     </div>`;
+  };
+
+  document.getElementById("wrap").innerHTML = `
+    <h1>Agent Health: <span class="status ${healthy ? "" : "warn"}">${healthy ? "Good" : "Attention"}</span></h1>
+    <div class="sub">Codex harness · ${L.sessions ?? 0} sessions · ${fmt(L.events ?? 0)} events</div>
+
+    <div class="card">
+      <div class="protect">
+        <span class="shield ${healthy ? "" : "warn"}">${healthy ? "✓" : "!"}</span>
+        Tool-call gate — ${fmt(reviewed)} reviewed
+        <span class="ok">${gateNote}</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="flex:0 0 132px">
+        ${gauge(reviewed ? challenged / reviewed : 0, "challenged")}
+        <div class="gauge-cap">Gate · ${L.rules ?? 0} saved rules</div>
+      </div>
+      <div class="card">
+        <div class="h2">Session logs <span class="action" onclick="open_('#sessions')">Open</span></div>
+        ${recent.length ? recent.map(r => `
+          <div class="lane" title="${r.id} · ${r.bytes.toLocaleString()} bytes · ${r.updatedAt}">
+            <span class="name">${r.id.slice(0, 8)}</span>
+            <span class="track"><span class="bar" style="width:${Math.round(r.bytes / recentMax * 100)}%;
+              background:${ACTIVE}"></span></span>
+            <span class="v">${fmt(r.bytes)}</span>
+          </div>`).join("") : `<div class="empty">Nothing recorded yet.</div>`}
+      </div>
+    </div>
+
+    ${ops ? opsCards()
+          : `<div class="note">Context and MCP figures need the ops snapshot on :4488 — not running.</div>`}`;
 }
 </script>
 </body>

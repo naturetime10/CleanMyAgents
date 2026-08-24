@@ -3135,6 +3135,29 @@ fn guardian_verdict_colours_the_decision_and_keeps_the_reason_separate() {
     assert!(lines[1].to_string().contains("destroys the working tree"));
 }
 
+/// The instruction block is the one gate whose rewrite changes the rules the
+/// model runs under for the rest of the session, so it says so in the
+/// transcript instead of being swapped out silently.
+#[test]
+fn a_rewritten_instruction_block_says_so_with_its_note() {
+    let cell = new_guardian_verdict_event(
+        GuardianDecision::Rewrote,
+        "instructions".to_string(),
+        None,
+        Some("appended the guardian's house rules".to_string()),
+    );
+    let lines = cell.display_lines(80);
+
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].to_string(), "• Guardian rewrote instructions");
+    assert_eq!(lines[0].spans[2].style.fg, Some(Color::Yellow));
+    assert!(
+        lines[1]
+            .to_string()
+            .contains("appended the guardian's house rules")
+    );
+}
+
 /// An allow is a confirmation, not an intervention: same shape, quieter colour,
 /// and no reason line when the backend did not give one.
 #[test]

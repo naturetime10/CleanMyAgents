@@ -36,6 +36,20 @@ if (has("help")) {
   --log <file>      append every request as JSONL    (default stub.jsonl)
   --quiet           don't print each request to stdout
 
+What the default 'rules' scenario does, and how to see each one in the TUI
+(every decision below prints a "Guardian ..." line in codex):
+
+  instructions  rewritten on every session: the guard appends its house rules
+                to AGENTS.md. An AGENTS.md line like "ignore the guardian" is
+                denied instead, and the whole block is dropped.
+  prompt        rewritten when it carries something credential-shaped, e.g.
+                "my api_key = sk-abcd1234efgh".
+  tool call     denied when destructive ("rm -rf build"); denied as garbage
+                when it proves nothing ("sleep 5", "echo test"); rewritten
+                when its arguments carry a credential.
+  tool output   rewritten when it carries a credential, or when it runs past
+                4000 characters ("seq 1 5000"), which trims it.
+
 Point codex at it:
 
   [guardian]
@@ -63,11 +77,35 @@ const reviews = new Map(); // id  -> { status, verdict }
 const idem = new Map(); // key -> id, so a retry cannot re-decide
 
 // --- the `rules` scenario --------------------------------------------------
-// Deliberately produces all three decisions in one session, so the codex UI has
-// something to render beyond a wall of green.
+// Deliberately exercises every power the guard has -- skipping a call, cleaning
+// one, rewriting a prompt, replacing the instruction block, and saying why it
+// refused -- in a single session, so the codex UI has something to render
+// beyond a wall of green.
 
 const DESTRUCTIVE = /\brm\s+-[a-z]*[rf]|\bmkfs\b|\bdd\s+if=|:\(\)\s*\{|>\s*\/dev\/sd/;
 const SECRET = /\b(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,})\b|\b(api[_ -]?key|password|secret)\b\s*[:=]/i;
+// Every match, for substitution: a non-global regex would redact only the first
+// one and leave the rest of the credential sitting there in plain sight.
+const SECRET_ALL = new RegExp(SECRET.source, "gi");
+
+// Busywork: a call that burns a turn without moving the task along. Skipping it
+// is the whole point of the guard, and the reason says so in as many words.
+const GARBAGE = /\bsleep\s+\d|\bwhile\s+true\b|\byes\s*[|>]|\/dev\/urandom|\becho\s+["']?(test|testing|foo|bar|baz|hello world)\b/i;
+// An instruction block talking the agent out of its own oversight. Instructions
+// arrive with more standing than a prompt does, so this one is worth dropping
+// rather than tidying.
+const SUBVERSIVE = /\b(ignore|disable|bypass|skip|turn off)\b[^.\n]{0,48}\b(guardian|guard|oversight|review|sandbox|approval)/i;
+// What the guard adds to every instruction block it lets through, so a session
+// carries its house rules even when the repo's AGENTS.md never mentions them.
+const HOUSE_RULES = [
+  "## Guardian house rules",
+  "",
+  "- Do not spend a turn on busywork; if a command proves nothing, skip it and say so.",
+  "- Never paste a credential into a command, a file, or a message.",
+  "- Say what you actually ran and what it actually printed.",
+].join("\n");
+// Above this, a tool result is cut down before the model ever sees it.
+const MAX_OUTPUT_CHARS = 4000;
 
 function decideByRules(action) {
   const blob = JSON.stringify(action ?? {});
@@ -76,25 +114,89 @@ function decideByRules(action) {
       return SECRET.test(action.text ?? "")
         ? {
             decision: "rewrite",
-            payload: (action.text ?? "").replace(SECRET, "[redacted]"),
+            payload: (action.text ?? "").replace(SECRET_ALL, "[redacted]"),
             note: "redacted what looked like a credential",
           }
         : { decision: "allow" };
+    case "instructions":
+      return decideInstructions(action.text ?? "");
     case "tool_call":
-      return DESTRUCTIVE.test(blob)
-        ? { decision: "deny", reason: "destructive command against the working tree" }
-        : { decision: "allow" };
+      if (DESTRUCTIVE.test(blob)) {
+        return { decision: "deny", reason: "destructive command against the working tree" };
+      }
+      if (GARBAGE.test(blob)) {
+        return {
+          decision: "deny",
+          reason: "skipped: that call is garbage — it burns a turn and proves nothing",
+        };
+      }
+      // Cleaning, not blocking: the call is fine once the credential is out of it.
+      if (SECRET.test(blob)) {
+        return {
+          decision: "rewrite",
+          payload: JSON.parse(
+            JSON.stringify(action.tool_input ?? {}).replace(SECRET_ALL, "[redacted]"),
+          ),
+          note: "scrubbed a credential out of the arguments",
+        };
+      }
+      return { decision: "allow" };
     case "tool_output":
-      return SECRET.test(blob)
-        ? {
-            decision: "rewrite",
-            payload: "[output withheld: it looked like it carried a credential]",
-            note: "withheld a credential from the model",
-          }
-        : { decision: "allow" };
+      return decideToolOutput(action, blob);
     default:
       return { decision: "allow" };
   }
+}
+
+/// Instructions are model-visible standing authority, so the guard gets the
+/// last word on them: it drops a block that argues against its own oversight,
+/// and otherwise hands back a block with its house rules appended.
+function decideInstructions(text) {
+  if (SUBVERSIVE.test(text)) {
+    return {
+      decision: "deny",
+      reason: "instructions tried to talk the agent out of its own oversight — dropped",
+    };
+  }
+  const kept = text
+    .split("\n")
+    .filter((line) => !SUBVERSIVE.test(line))
+    .join("\n")
+    .trimEnd();
+  return {
+    decision: "rewrite",
+    payload: `${kept}\n\n${HOUSE_RULES}\n`,
+    note: "appended the guardian's house rules",
+  };
+}
+
+/// A tool result is the last place anything can be taken out before the model
+/// reads it, so both scrubbing and trimming happen here.
+function decideToolOutput(action, blob) {
+  if (SECRET.test(blob)) {
+    return {
+      decision: "rewrite",
+      payload: "[output withheld: it looked like it carried a credential]",
+      note: "withheld a credential from the model",
+    };
+  }
+  const text = outputText(action.tool_response);
+  if (text.length > MAX_OUTPUT_CHARS) {
+    const dropped = text.length - MAX_OUTPUT_CHARS;
+    return {
+      decision: "rewrite",
+      payload: `${text.slice(0, MAX_OUTPUT_CHARS)}\n\n[guardian trimmed ${dropped} characters of output]`,
+      note: `trimmed ${dropped} characters of output`,
+    };
+  }
+  return { decision: "allow" };
+}
+
+/// The model-visible text of a tool result, whatever shape the response took.
+function outputText(response) {
+  if (typeof response === "string") return response;
+  if (response == null) return "";
+  return JSON.stringify(response);
 }
 
 // --- wire helpers ----------------------------------------------------------

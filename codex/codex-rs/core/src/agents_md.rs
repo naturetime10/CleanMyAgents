@@ -335,6 +335,13 @@ impl LoadedAgentsMd {
     /// This cannot be gated with `#[cfg(test)]` because integration tests
     /// compile `codex-core` as a normal dependency without that configuration.
     pub fn from_text_for_testing(contents: impl Into<String>) -> Self {
+        Self::from_text(contents)
+    }
+
+    /// Creates instructions holding one block of text with no filesystem
+    /// provenance. Used when the guard layer replaces the loaded block with a
+    /// rewrite of its own: what the model sees is no longer any file on disk.
+    pub(crate) fn from_text(contents: impl Into<String>) -> Self {
         let contents = contents.into();
         if contents.trim().is_empty() {
             return Self::default();

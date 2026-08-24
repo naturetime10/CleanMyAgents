@@ -13,7 +13,8 @@ import { createSessionStore } from "./store.js";
 
 // Optional ops sidecar. Nothing in this app starts one: /snapshot and /apply
 // are proxied if something is already listening, and answer 502 otherwise —
-// the panel says "Connecting…" and every other feature is unaffected.
+// the panel then drops the snapshot-backed cards and every other feature is
+// unaffected.
 const API_PORT = 4488;
 const APP_PORT = 4490;   // webui/dist + API proxy, same-origin like prod (4499 is vite dev's)
 const DIST = fileURLToPath(new URL("../webui/dist/", import.meta.url));
@@ -70,16 +71,38 @@ function handleEvents(req, res, url) {
 const RULES = [
   ["destructive shell", /\brm\s+-rf?\b|\bmkfs\b|\bdiskutil\s+erase/i],
   ["pipe-to-shell", /\b(curl|wget)\b[^|;&]*\|\s*(ba|z)?sh\b/i],
-  ["credential access", /\b(secret|password|api[_-]?key|token|credential)s?\b.{0,40}\b(cat|read|print|echo|curl|post)\b|\b(cat|read)\b.{0,40}\b\.(env|aws|ssh)\b/i],
+  // both orders: the noun can lead ("token ... echo") or trail ("cat ... credentials").
+  // Dotfile paths are matched without a leading \b — there is no word boundary
+  // between the "/" and the "." in "~/.aws", so \b\. would only ever fire on
+  // "foo.env" and never on the dotfiles this is here to catch.
+  ["credential access", /\b(secret|password|api[_-]?key|token|credential)s?\b.{0,40}\b(cat|read|print|echo|curl|post)\b|\b(cat|read|print|echo|curl|post)\b.{0,40}\b(secret|password|api[_-]?key|token|credential)s?\b|\b(cat|read)\b.{0,40}\.(env|aws|ssh)\b/i],
   ["prompt injection", /ignore (all )?(previous|prior) (instructions|rules)|disregard your (instructions|system prompt)/i],
-  ["exfiltration", /\b(curl|wget|fetch|http)\b.{0,60}\b(\.env|id_rsa|keychain|cookies)\b/i],
+  ["exfiltration", /\b(curl|wget|fetch|http)\b.{0,60}(\.env\b|\b(id_rsa|keychain|cookies)\b)/i],
   ["obfuscation", /base64\s+(-d|--decode)|\beval\s*\(\s*atob/i],
 ];
 const scan = (text) => RULES.filter(([, re]) => re.test(text)).map(([name]) => name);
 
 const pending = new Map(); // id → {res, key} awaiting a decision
-let seq = 0, island, rulesFile;
+let seq = 0, island, islandReady, rulesFile;
 let savedRules = {};       // key → "allow" | "deny", persisted
+
+// "ask on everything": when on, a clean call is still challenged on the island
+// instead of sailing through. Seeded from CMA_ASK_ALL at boot, flipped live over
+// POST /settings, persisted so a restart keeps whatever was chosen.
+let settings = { askAll: false }, settingsFile;
+
+function loadSettings() {
+  settingsFile = join(app.getPath("userData"), "settings.json");
+  if (existsSync(settingsFile)) try { settings = { ...settings, ...JSON.parse(readFileSync(settingsFile, "utf8")) }; } catch {}
+  if (process.env.CMA_ASK_ALL) settings.askAll = process.env.CMA_ASK_ALL !== "0";
+}
+
+const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 1));
+
+// The synthetic hit that stands in for "no rule fired, but ask anyway". It rides
+// the normal hits array so the island, the event log and the saved-rule key all
+// treat it like any other reason to stop.
+const ASK_ALL = "ask-all";
 
 function loadRules() {
   rulesFile = join(app.getPath("userData"), "decisions.json");
@@ -121,18 +144,29 @@ function handleIndex(store, req, res) {
 function askIsland(req, res, key) {
   const id = String(++seq);
   pending.set(id, { res, key, text: req.text });
-  // show() reports the height the content needs, so the window always fits it
-  island.webContents.executeJavaScript(`show(${JSON.stringify({ id, ...req })})`).then((h) => {
-    const display = screen.getPrimaryDisplay();
-    const w = 520;
-    island.setBounds({
-      x: Math.round(display.workArea.x + display.workArea.width / 2 - w / 2),
-      y: display.workArea.y + 8, // floats just under the menu bar, like a native HUD
-      width: w,
-      height: Math.ceil(Number(h) || 200),
+  // The island loads its page asynchronously at boot, so an early review can
+  // land before show() exists. Waiting for the load turns that race into a
+  // short delay instead of a call that hangs until the guardian times out.
+  islandReady
+    // show() reports the height the content needs, so the window always fits it
+    .then(() => island.webContents.executeJavaScript(`show(${JSON.stringify({ id, ...req })})`))
+    .then((h) => {
+      const display = screen.getPrimaryDisplay();
+      const w = 520;
+      island.setBounds({
+        x: Math.round(display.workArea.x + display.workArea.width / 2 - w / 2),
+        y: display.workArea.y + 8, // floats just under the menu bar, like a native HUD
+        width: w,
+        height: Math.ceil(Number(h) || 200),
+      });
+      island.showInactive(); // don't steal focus from the agent's terminal
+    })
+    .catch((e) => {
+      // No island means no way to ask, and a gate that cannot ask must not
+      // silently pass. Deny loudly rather than leave the caller hanging.
+      console.error("island failed to render; denying", id, e);
+      settle(id, false, false);
     });
-    island.showInactive(); // don't steal focus from the agent's terminal
-  });
 }
 
 function settle(id, allow, always) {
@@ -165,6 +199,9 @@ function handleToolcall(req, res) {
     // a call that looks like one that was already denied gets a human look
     const past = blockedIndex.match(text);
     if (past) hits.push("similar-to-blocked");
+    // before the event is written, so the log records the reason the call was
+    // actually challenged rather than the empty hits it had a moment earlier
+    if (hits.length === 0 && settings.askAll) hits.push(ASK_ALL);
     events.push({ kind: "toolcall", tool: call.tool, hits, receivedAt: new Date().toISOString() });
     appendFileSync(eventsFile, JSON.stringify(events[events.length - 1]) + "\n");
     if (hits.length === 0) return res.end('{"allow":true,"verdict":"clean"}');
@@ -178,6 +215,22 @@ function handleToolcall(req, res) {
     askIsland({ tool: call.tool, text, hits,
                 match: near && { sim: Math.round(near.sim * 100), text: near.text,
                                  kind: near === past ? "blocked" : "rubbish" } }, res, key);
+  });
+}
+
+// GET → current settings, POST {askAll} → flip it live, no restart needed
+function handleSettings(req, res) {
+  res.setHeader("content-type", "application/json");
+  if (req.method === "GET") return res.end(JSON.stringify(settings));
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => {
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      if ("askAll" in body) settings.askAll = Boolean(body.askAll);
+      saveSettings();
+      res.end(JSON.stringify(settings));
+    } catch { res.statusCode = 400; res.end('{"error":"expected {askAll}"}'); }
   });
 }
 
@@ -243,6 +296,7 @@ function handleReviewPost(req, res) {
     if (junk) hits.push("rubbish-similar");
     const past = blockedIndex.match(text);
     if (past) hits.push("similar-to-blocked");
+    if (hits.length === 0 && settings.askAll) hits.push(ASK_ALL);
     events.push({ kind: "review", tool, hits, receivedAt: new Date().toISOString() });
     appendFileSync(eventsFile, JSON.stringify(events[events.length - 1]) + "\n");
     // reviews land in the same per-thread file, verdict stamped when decided
@@ -265,8 +319,13 @@ function handleReviewPost(req, res) {
       return respondReview(res, id);
     }
     // a human already answered for these hits in this turn — honour it
+    // A turn grant is inferred, not chosen: one answer covers every later call
+    // with the same hits in the turn. That is the right call for a rule hit, but
+    // it would turn "ask me about everything" into "ask me once per turn", so
+    // ask-all challenges skip it. An explicit "always" (savedRules, above) still
+    // counts — the user picked that one.
     const turnKey = `${body.context?.turn_id ?? ""}|${hits.join(",")}`;
-    if (body.context?.turn_id && turnGrants.has(turnKey)) {
+    if (!hits.includes(ASK_ALL) && body.context?.turn_id && turnGrants.has(turnKey)) {
       const allow = turnGrants.get(turnKey);
       reviews.set(id, { status: "decided", verdict: verdictFor(allow) });
       logReview(verdictFor(allow), "turn-grant");
@@ -283,7 +342,7 @@ function handleReviewPost(req, res) {
       { end: (out) => {
           const allow = JSON.parse(out).allow;
           reviews.set(id, { status: "decided", verdict: verdictFor(allow) });
-          if (body.context?.turn_id) turnGrants.set(turnKey, allow);
+          if (body.context?.turn_id && !hits.includes(ASK_ALL)) turnGrants.set(turnKey, allow);
           logReview(verdictFor(allow), "island");
         } },
       ruleKey);
@@ -437,6 +496,7 @@ function serveApp() {
       if (!entries) { res.statusCode = 404; return res.end('{"title":"unknown session"}'); }
       return res.end(JSON.stringify(entries));
     }
+    if (path === "/settings") return handleSettings(req, res);
     if (path === "/decision" && req.method === "POST") return handleDecision(req, res);
     if (path === "/deep-scan" && req.method === "POST") return handleDeepScan(req, res);
     // /sessions is the guardian's per-thread store; the codex rollout files on
@@ -473,11 +533,39 @@ function serveApp() {
   }).listen(APP_PORT, "127.0.0.1");
 }
 
+// What the app itself knows. No sidecar involved, so this is always available
+// — the panel renders from it whether or not an ops snapshot exists.
+function localState() {
+  const gated = events.filter((e) => e.kind === "review" || e.kind === "toolcall");
+  const logs = sessions.list();
+  return {
+    sessions: logs.length,
+    events: events.length,
+    reviewed: gated.length,
+    challenged: gated.filter((e) => e.hits?.length).length,
+    blocked: blockedIndex.size(),
+    rubbish: rubbish.size(),
+    rules: Object.keys(savedRules).length,
+    recent: logs.slice(0, 5),
+  };
+}
+
 async function refresh() {
+  // The ops snapshot is optional and normally absent — nothing serves 4488
+  // unless someone runs a sidecar there. A 502 is not a reason to show
+  // nothing, so the panel gets local state either way and the snapshot-backed
+  // cards simply don't render without one.
+  let ops = null;
   try {
-    const snap = await (await fetch(`http://127.0.0.1:${APP_PORT}/snapshot`)).json();
-    await win.webContents.executeJavaScript(`render(${JSON.stringify(snap)})`);
-  } catch { /* sidecar still booting; panel shows "Connecting…" */ }
+    const res = await fetch(`http://127.0.0.1:${APP_PORT}/snapshot`);
+    if (res.ok) ops = await res.json();
+  } catch { /* no sidecar; ops stays null */ }
+  const payload = JSON.stringify({ local: localState(), ops });
+  try {
+    await win.webContents.executeJavaScript(`render(${payload})`);
+  } catch (e) {
+    console.error("panel render failed:", e); // a stuck panel should say why
+  }
 }
 
 function toggle() {
@@ -491,9 +579,11 @@ function toggle() {
   win.show();
 }
 
-function openFullApp() {
+function openFullApp(url) {
   const full = new BrowserWindow({ width: 1100, height: 760, titleBarStyle: "hiddenInset" });
-  full.loadURL(`http://127.0.0.1:${APP_PORT}/`);
+  const home = `http://127.0.0.1:${APP_PORT}/`;
+  // the panel's links carry the tab hash; anything else opens the app home
+  full.loadURL(url?.startsWith(home) ? url : home);
   win.hide();
 }
 
@@ -501,6 +591,7 @@ app.whenReady().then(() => {
   app.dock?.hide();
 
   loadEvents();
+  loadSettings();
   loadRules();
   rubbish = createRubbishStore(join(app.getPath("userData"), "rubbish.json"));
   blockedIndex = createRubbishStore(join(app.getPath("userData"), "blocked.json"));
@@ -514,7 +605,7 @@ app.whenReady().then(() => {
   win.on("blur", () => win.hide());
   win.loadFile(PANEL);
   // window.open() from the panel = "Open CleanMyAgent" → full webui window
-  win.webContents.setWindowOpenHandler(() => { openFullApp(); return { action: "deny" }; });
+  win.webContents.setWindowOpenHandler(({ url }) => { openFullApp(url); return { action: "deny" }; });
 
   // notch "island" for tool-call approvals — CodeIsland-style, top-center over the notch
   island = new BrowserWindow({
@@ -523,6 +614,10 @@ app.whenReady().then(() => {
   });
   island.setAlwaysOnTop(true, "screen-saver");
   island.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  islandReady = new Promise((resolve, reject) => {
+    island.webContents.once("did-finish-load", resolve);
+    island.webContents.once("did-fail-load", (_e, code, desc) => reject(new Error(`island load failed: ${code} ${desc}`)));
+  });
   island.loadURL(`http://127.0.0.1:${APP_PORT}/island`);
 
   // "Template" suffix → macOS tints it for light/dark menu bars automatically

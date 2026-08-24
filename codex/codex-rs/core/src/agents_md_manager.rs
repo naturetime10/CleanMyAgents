@@ -14,6 +14,20 @@ use tokio::sync::Mutex;
 pub(crate) struct AgentsMdManager {
     user_instructions: Option<UserInstructions>,
     cache: Mutex<AgentsMdCache>,
+    guard_cache: Mutex<Option<GuardedInstructions>>,
+}
+
+/// What the guard layer decided about one instruction block.
+///
+/// The instructions gate runs once per model step, and the block is usually
+/// identical across the whole session; re-reviewing it every step would ask the
+/// guard the same question repeatedly and put a verdict line under every step.
+struct GuardedInstructions {
+    /// The block that was submitted for review.
+    reviewed: String,
+    /// What the step should use instead: the original, a rewrite, or nothing
+    /// at all when the guard denied it.
+    result: Option<Arc<LoadedAgentsMd>>,
 }
 
 #[derive(Default)]
@@ -30,6 +44,7 @@ impl AgentsMdManager {
             user_instructions: user_instructions
                 .filter(|instructions| !instructions.text.trim().is_empty()),
             cache: Mutex::new(AgentsMdCache::default()),
+            guard_cache: Mutex::new(None),
         }
     }
 
@@ -81,5 +96,27 @@ impl AgentsMdManager {
 
     pub(crate) fn user_instructions(&self) -> Option<UserInstructions> {
         self.user_instructions.clone()
+    }
+
+    /// The guard's standing decision about `reviewed`, when it has already
+    /// decided on exactly that block. `Some(None)` means it denied it.
+    pub(crate) async fn guarded_instructions(
+        &self,
+        reviewed: &str,
+    ) -> Option<Option<Arc<LoadedAgentsMd>>> {
+        let cache = self.guard_cache.lock().await;
+        cache
+            .as_ref()
+            .filter(|guarded| guarded.reviewed == reviewed)
+            .map(|guarded| guarded.result.clone())
+    }
+
+    /// Remembers what the guard decided about one instruction block.
+    pub(crate) async fn store_guarded_instructions(
+        &self,
+        reviewed: String,
+        result: Option<Arc<LoadedAgentsMd>>,
+    ) {
+        *self.guard_cache.lock().await = Some(GuardedInstructions { reviewed, result });
     }
 }

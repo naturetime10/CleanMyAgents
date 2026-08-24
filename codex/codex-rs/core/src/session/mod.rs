@@ -283,7 +283,10 @@ use crate::shell;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
+use crate::agents_md::LoadedAgentsMd;
 use codex_guardian::Activity;
+use codex_guardian::GuardedAction;
+use codex_guardian::Verdict;
 
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -3202,6 +3205,7 @@ impl Session {
             )
             .await?;
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
+        let loaded_agents_md = self.guard_instructions(&turn_context, loaded_agents_md).await;
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)
             .await;
@@ -3293,6 +3297,68 @@ impl Session {
             tool_router,
             loaded_agents_md,
         }))
+    }
+
+    /// GUARD GATE (above the hook layer) for the instruction block.
+    ///
+    /// AGENTS.md files and host user instructions are model-visible input that
+    /// the model treats as standing authority, so the guard decides on them
+    /// before they reach context: `Rewrite` substitutes the whole block and
+    /// `Deny` drops it, leaving the step with no instructions at all.
+    ///
+    /// The gate sits on the per-step path, so a block the guard has already
+    /// ruled on reuses that ruling instead of being submitted again.
+    async fn guard_instructions(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        loaded: Option<Arc<LoadedAgentsMd>>,
+    ) -> Option<Arc<LoadedAgentsMd>> {
+        // Rendering the block to submit it costs a copy of every AGENTS.md in
+        // play, so the default-off configuration must not pay for it.
+        if !self.services.guardian.is_enabled() {
+            return loaded;
+        }
+        let text = loaded
+            .as_ref()
+            .map(|loaded| loaded.text())
+            .unwrap_or_default();
+        if text.trim().is_empty() {
+            return loaded;
+        }
+        if let Some(decided) = self
+            .services
+            .agents_md_manager
+            .guarded_instructions(&text)
+            .await
+        {
+            return decided;
+        }
+
+        let verdict = guardian_tap::review(
+            self,
+            turn_context,
+            GuardedAction::Instructions {
+                source: "agents_md".to_string(),
+                text: text.clone(),
+            },
+        )
+        .await;
+        let result = match verdict {
+            Verdict::Deny { .. } => None,
+            Verdict::Rewrite { payload, .. } => {
+                let rewritten = match payload {
+                    Value::String(text) => text,
+                    other => other.to_string(),
+                };
+                Some(Arc::new(LoadedAgentsMd::from_text(rewritten)))
+            }
+            Verdict::Allow | Verdict::Defer => loaded,
+        };
+        self.services
+            .agents_md_manager
+            .store_guarded_instructions(text, result.clone())
+            .await;
+        result
     }
 
     pub(crate) async fn record_inter_agent_communication(

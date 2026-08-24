@@ -33,6 +33,7 @@ use pretty_assertions::assert_eq;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
@@ -409,6 +410,99 @@ async fn a_denied_prompt_is_blocked_and_reported_with_its_reason() -> Result<()>
     );
 
     Ok(())
+}
+
+/// AGENTS.md is standing authority: the model reads it as its own instructions
+/// and follows it for the rest of the session. So the guard has to reach it
+/// too -- what lands in context must be the guard's rewrite, not what was
+/// loaded from disk, and the user has to be told it happened.
+#[tokio::test]
+async fn a_rewritten_instruction_block_replaces_what_the_model_sees() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const LOADED: &str = "never run the tests";
+    const REWRITTEN: &str = "always run the tests";
+
+    let guardian_server = MockServer::start().await;
+    // Only the instruction block is rewritten; everything else this turn goes
+    // through untouched, so the rewrite that shows up downstream can only have
+    // come from this gate.
+    mount_reviews_matching(
+        &guardian_server,
+        serde_json::json!({ "action": { "action": "instructions" } }),
+        serde_json::json!({ "decision": "rewrite", "payload": REWRITTEN, "note": "house rules" }),
+    )
+    .await;
+    mount_reviews(&guardian_server, serde_json::json!({ "decision": "allow" })).await;
+    mount_activities(&guardian_server).await;
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "understood"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let endpoint = guardian_server.uri();
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home: &Path| {
+            std::fs::write(home.join("AGENTS.md"), LOADED).expect("write AGENTS.md");
+        })
+        .with_config(move |config| {
+            config.guardian = GuardianConfig {
+                mode: GuardianMode::Api,
+                endpoint: Some(endpoint.clone()),
+                ..GuardianConfig::default()
+            };
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello guardian").await?;
+
+    let reviews = reviews_received(&guardian_server).await;
+    let submitted = reviews
+        .iter()
+        .find(|body| body["action"]["action"] == "instructions")
+        .unwrap_or_else(|| panic!("no instructions review among {reviews:#?}"));
+    assert_eq!(submitted["action"]["text"], LOADED);
+    assert_eq!(submitted["action"]["source"], "agents_md");
+
+    let instructions = responses
+        .single_request()
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("# AGENTS.md instructions"))
+        .unwrap_or_else(|| panic!("the model was sent no instructions message"));
+    assert!(
+        instructions.contains(REWRITTEN) && !instructions.contains(LOADED),
+        "the model should see the rewrite, not the loaded file: {instructions}"
+    );
+
+    Ok(())
+}
+
+/// Answers every review whose body matches `matching` with `verdict`, ahead of
+/// the catch-all mock, so one gate can be singled out.
+async fn mount_reviews_matching(
+    server: &MockServer,
+    matching: serde_json::Value,
+    verdict: serde_json::Value,
+) {
+    Mock::given(method("POST"))
+        .and(path_regex(r".*/v1/reviews$"))
+        .and(body_partial_json(matching))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "review_id": "rev-matched",
+            "status": "decided",
+            "verdict": verdict,
+        })))
+        .with_priority(/*ahead of the catch-all*/ 1)
+        .mount(server)
+        .await;
 }
 
 /// Answers every review with `verdict`, and records the request for inspection.
