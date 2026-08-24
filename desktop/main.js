@@ -123,6 +123,16 @@ const outputText = (response) =>
   : Array.isArray(response?.content) ? response.content.map((c) => c?.text ?? "").join("\n")
   : JSON.stringify(response ?? "");
 
+// The command a guarded action is about, for the one line the flash shows. exec
+// tools carry it as a string or as an argv array; anything else is only worth
+// showing as its input JSON.
+function commandOf(action) {
+  const c = action?.tool_input?.command;
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) return c.join(" ");
+  return action?.tool_input ? JSON.stringify(action.tool_input) : undefined;
+}
+
 // Drops every output line the NOISE list covers. Returns undefined when the
 // output is clean, so it takes the normal path untouched.
 function trimNoise(response) {
@@ -193,26 +203,54 @@ function handleIndex(store, req, res) {
   });
 }
 
+// Puts the window under the menu bar at the height the content asked for. The
+// card reports its own height, so a two-line flash is not sized like a review.
+function placeIsland(h) {
+  const display = screen.getPrimaryDisplay();
+  const w = 520;
+  island.setBounds({
+    x: Math.round(display.workArea.x + display.workArea.width / 2 - w / 2),
+    y: display.workArea.y + 8, // floats just under the menu bar, like a native HUD
+    width: w,
+    height: Math.ceil(Number(h) || 200),
+  });
+  island.showInactive(); // don't steal focus from the agent's terminal
+}
+
+// A skip decides itself, but it should not be invisible: without a surface the
+// only trace is the codex TUI line and the session file, so a skipped lint run
+// looks exactly like a lint run that never happened.
+//
+// So the island says it, and says it in passing — no buttons, gone in a couple
+// of seconds, nothing to answer. A pending review outranks it: the island is
+// busy asking something that actually needs a person, and the skip is in the
+// log either way.
+let flashTimer = null;
+function flashIsland(title, tool, text) {
+  if (pending.size) return;
+  islandReady
+    .then(() => island.webContents.executeJavaScript(`flash(${JSON.stringify({ title, tool, text })})`))
+    .then((h) => {
+      placeIsland(h);
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => { if (pending.size === 0) island.hide(); }, 2600);
+    })
+    // Nothing hangs on a flash — a review that cannot render denies, this only
+    // fails to be seen.
+    .catch((e) => console.error("island failed to flash", e));
+}
+
 function askIsland(req, res, key) {
   const id = String(++seq);
   pending.set(id, { res, key, text: req.text });
+  clearTimeout(flashTimer); // a flash must never time out a live question away
   // The island loads its page asynchronously at boot, so an early review can
   // land before show() exists. Waiting for the load turns that race into a
   // short delay instead of a call that hangs until the guardian times out.
   islandReady
     // show() reports the height the content needs, so the window always fits it
     .then(() => island.webContents.executeJavaScript(`show(${JSON.stringify({ id, ...req })})`))
-    .then((h) => {
-      const display = screen.getPrimaryDisplay();
-      const w = 520;
-      island.setBounds({
-        x: Math.round(display.workArea.x + display.workArea.width / 2 - w / 2),
-        y: display.workArea.y + 8, // floats just under the menu bar, like a native HUD
-        width: w,
-        height: Math.ceil(Number(h) || 200),
-      });
-      island.showInactive(); // don't steal focus from the agent's terminal
-    })
+    .then(placeIsland)
     .catch((e) => {
       // No island means no way to ask, and a gate that cannot ask must not
       // silently pass. Deny loudly rather than leave the caller hanging.
@@ -249,6 +287,7 @@ function handleToolcall(req, res) {
     if (garbage) {
       events.push({ kind: "toolcall", tool: call.tool, hits: [`garbage:${garbage}`], receivedAt: new Date().toISOString() });
       appendFileSync(eventsFile, JSON.stringify(events[events.length - 1]) + "\n");
+      flashIsland(`Skipped a ${garbage}`, call.tool, text);
       return res.end(JSON.stringify({ allow: false, verdict: "garbage", reason: `skipped: ${garbage}` }));
     }
     const hits = scan(text);
@@ -373,6 +412,7 @@ function handleReviewPost(req, res) {
     if (kind === "tool_call" || kind === "approval") {
       const garbage = firstMatch(GARBAGE, text);
       if (garbage) {
+        flashIsland(`Skipped a ${garbage}`, tool, commandOf(body.action) ?? text);
         return decide({ decision: "deny", reason: `skipped: ${garbage} — it burns a turn and proves nothing` },
                       "garbage", [`garbage:${garbage}`]);
       }
@@ -380,6 +420,9 @@ function handleReviewPost(req, res) {
     if (kind === "tool_output") {
       const noise = trimNoise(body.action?.tool_response);
       if (noise) {
+        flashIsland(noise.kept.trim()
+          ? `Dropped ${noise.dropped} line(s) of ${noise.name}`
+          : `Dropped the output — nothing but ${noise.name}`, tool, "");
         return decide(noise.kept.trim()
           ? { decision: "rewrite", payload: noise.kept, note: `dropped ${noise.dropped} line(s) of ${noise.name}` }
           : { decision: "deny", reason: `skipped: the output was nothing but ${noise.name}` },
