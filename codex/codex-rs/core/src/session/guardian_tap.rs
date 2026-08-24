@@ -101,6 +101,7 @@ fn verdict_event(action: &GuardedAction, verdict: &Verdict) -> Option<GuardianVe
 fn action_label(action: &GuardedAction) -> &'static str {
     match action {
         GuardedAction::Prompt { .. } => "prompt",
+        GuardedAction::Instructions { .. } => "instructions",
         GuardedAction::ToolCall { .. } => "tool call",
         GuardedAction::ToolOutput { .. } => "tool output",
         GuardedAction::Approval { .. } => "approval",

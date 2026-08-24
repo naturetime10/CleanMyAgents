@@ -56,6 +56,12 @@ pub enum GuardedAction {
     /// A user prompt about to enter history and be sent to the model.
     /// `Rewrite` replaces the prompt text.
     Prompt { text: String },
+    /// The instruction block -- host user instructions plus every discovered
+    /// AGENTS.md -- about to become model-visible for the step. The model
+    /// treats these as standing authority, so the guard decides on them before
+    /// they enter context: `Rewrite` substitutes the whole block, `Deny` drops
+    /// it and the step runs with no instructions at all.
+    Instructions { source: String, text: String },
     /// A tool or MCP call about to be dispatched. `Rewrite` replaces the tool
     /// input JSON.
     ToolCall {
@@ -96,6 +102,7 @@ impl GuardedAction {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Prompt { .. } => "prompt",
+            Self::Instructions { .. } => "instructions",
             Self::ToolCall { .. } => "tool_call",
             Self::ToolOutput { .. } => "tool_output",
             Self::Approval { .. } => "approval",
@@ -111,7 +118,7 @@ impl GuardedAction {
             | Self::ToolOutput { tool_name, .. }
             | Self::Approval { tool_name, .. } => Some(tool_name.as_str()),
             Self::McpAdmission { server_name, .. } => Some(server_name.as_str()),
-            Self::Prompt { .. } | Self::Compaction { .. } => None,
+            Self::Prompt { .. } | Self::Instructions { .. } | Self::Compaction { .. } => None,
         }
     }
 
@@ -122,7 +129,10 @@ impl GuardedAction {
                 Some(call_id.as_str())
             }
             Self::Approval { run_id, .. } => Some(run_id.as_str()),
-            Self::Prompt { .. } | Self::McpAdmission { .. } | Self::Compaction { .. } => None,
+            Self::Prompt { .. }
+            | Self::Instructions { .. }
+            | Self::McpAdmission { .. }
+            | Self::Compaction { .. } => None,
         }
     }
 }

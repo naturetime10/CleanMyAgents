@@ -36,6 +36,28 @@ curl http://127.0.0.1:4490/blocked
 "Always allow/deny" on the island persists to `decisions.json` and skips the
 popup for that tool + rule combination from then on.
 
+## Ask on everything
+
+By default only a rule hit, a rubbish-index match or a blocked-index match
+reaches the island — a clean call is allowed silently. To be asked about every
+call instead, turn on `askAll`:
+
+```sh
+curl -X POST http://127.0.0.1:4490/settings -d '{"askAll":true}'   # live, no restart
+curl http://127.0.0.1:4490/settings                                 # {"askAll":true}
+```
+
+It persists to `userData/settings.json`, and `CMA_ASK_ALL=1 npm start` seeds it
+at boot. Clean calls then carry the synthetic hit `ask-all`, so they show on the
+island and appear in the logs with a reason rather than as an empty `hits` list.
+
+Two deliberate details: the per-turn grant that normally lets one answer cover
+later calls with the same hits in a turn is skipped for `ask-all` challenges —
+otherwise "ask me about everything" would mean "ask me once per turn". An
+explicit "Always allow/deny" still sticks, because that one was chosen. And
+with `askAll` on, tool *outputs* are challenged too, which is roughly a popup
+per step.
+
 ## Build the fork
 
 ```sh
@@ -69,8 +91,16 @@ local.
 
 | codex sends | desktop does |
 |---|---|
-| `POST /v1/reviews` (prompt / tool_call / tool_output / approval / mcp_admission / compaction) | keyword rules → rubbish index → blocked index; clean → allow; hit → `202` + island, human decides, poller picks the verdict up |
+| `POST /v1/reviews` (prompt / instructions / tool_call / tool_output / approval / mcp_admission / compaction) | keyword rules → rubbish index → blocked index; clean → allow; hit → `202` + island, human decides, poller picks the verdict up |
 | `POST /v1/activities` (lifecycle, completions, token usage, context window) | appended to `userData/sessions/<thread_id>.jsonl` and the `events.jsonl` firehose |
+
+A verdict is not only allow-or-deny. On any of those gates the app can answer
+`deny` to skip the action and say why (the reason reaches both the model and
+the codex TUI), or `rewrite` to hand back a cleaned payload that is used in
+place of the original: a scrubbed prompt, scrubbed tool arguments, a trimmed
+tool result, or a replacement instruction block. `instructions` is the
+AGENTS.md + user-instruction block for the step, so rewriting it changes the
+standing rules the model runs under, and denying it drops them entirely.
 
 Denials — human, rule, or fed in from outside — seed the blocked index, so
 the net widens with every refusal. Session files are plain JSONL keyed by
