@@ -41,9 +41,22 @@
   .btn:active { filter: brightness(1.2); }
   .sub { text-align: center; padding: 5px 0 0; font-size: 11px; color: #8b84a0; cursor: pointer; }
   .sub:active { color: #fff; }
+  /* the flash: same card, nothing to answer — a steady dot rather than the
+     pulsing one, since nothing is waiting on the user */
+  .dot.calm { background: #8b84a0; animation: none; }
+  .cmd { font-family: ui-monospace, "SF Mono", monospace; font-size: 11px; color: #b3aec0;
+         margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
+  <div class="island" id="flashCard" hidden>
+    <div class="head">
+      <span class="dot calm"></span><span id="flashTitle"></span>
+      <span class="tool" id="flashTool"></span>
+    </div>
+    <div class="cmd" id="flashCmd"></div>
+  </div>
   <div class="island" id="card">
     <div class="head">
       <span class="dot"></span>Tool call flagged
@@ -70,6 +83,7 @@ let id = null, left = 30, timer = null;
 // content clamps itself (2-line matched + 2-line snippet), never scrolls.
 function show(req) {
   id = req.id; left = 30;
+  card(false);
   document.getElementById("tool").textContent = req.tool ?? "unknown";
   // a match names what it resembles, so the verdict is checkable
   document.getElementById("hits").textContent = (req.hits ?? []).join(", ")
@@ -82,6 +96,29 @@ function show(req) {
     document.getElementById("count").textContent = `auto-deny ${--left}s`;
     if (left <= 0) decide(false);
   }, 1000);
+  return document.body.scrollHeight;
+}
+
+// Swaps which card is on screen. The flash and the review share the window, and
+// a review always wins it: show() calls this before it fills anything in.
+function card(flashing) {
+  document.getElementById("flashCard").hidden = !flashing;
+  document.getElementById("card").hidden = flashing;
+}
+
+// A skip, said in passing. No id, no timer, nothing to answer — main hides the
+// window again a couple of seconds later.
+function flash(req) {
+  clearInterval(timer);
+  id = null;
+  card(true);
+  document.getElementById("flashTitle").textContent = req.title ?? "Skipped";
+  const tool = document.getElementById("flashTool");
+  tool.textContent = req.tool ?? "";
+  tool.hidden = !req.tool;
+  const cmd = document.getElementById("flashCmd");
+  cmd.textContent = (req.text ?? "").slice(0, 200);
+  cmd.hidden = !cmd.textContent;
   return document.body.scrollHeight;
 }
 

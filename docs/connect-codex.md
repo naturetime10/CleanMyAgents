@@ -75,6 +75,13 @@ telemetry notices, newsletter plugs. Matching lines are dropped and the rest of
 the output is handed back as a `rewrite`, so one advertising line does not cost
 the model the whole result. If nothing survives, the output is denied outright.
 
+A skip still shows: the island drops for about two seconds with what was
+skipped and the command it was skipped for — no buttons, nothing to answer.
+A pending review outranks it, so a flash never appears over a question and
+never times one out. Without it the only trace was the codex TUI line and the
+session file, which is why a skipped lint run looked like a lint run that never
+happened.
+
 Both are plain arrays of `[name, regex]` next to `RULES` — edit them there.
 Remove an entry if you actually want that call: with `lint run` on the list, a
 lint the agent was asked to run is skipped too.
