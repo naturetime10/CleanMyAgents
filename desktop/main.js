@@ -82,6 +82,58 @@ const RULES = [
 ];
 const scan = (text) => RULES.filter(([, re]) => re.test(text)).map(([name]) => name);
 
+// --- the skip list --------------------------------------------------------
+// Not everything the gate stops is dangerous. Some calls are simply a waste of
+// a turn — a lint run nobody asked for, a `sleep 5`, an `echo test` — and some
+// tool output is noise the model should never have to read: funding pitches,
+// upgrade nags, the advertising a package manager prints around the part that
+// matters.
+//
+// Neither is a judgment call, so neither reaches the island: there is nothing
+// for a person to decide. A matching call is skipped where it arrives, and
+// matching output lines are dropped while the rest of the output survives.
+const GARBAGE = [
+  // lint and formatting runs: they prove nothing about the task in hand and
+  // cost a turn each
+  ["lint run", /\b(eslint|tslint|stylelint|ruff|flake8|pylint|rubocop|golangci-lint)\b|\bcargo\s+clippy\b|\b(npm|pnpm|yarn|bun)\s+(run\s+)?lint\b/i],
+  ["formatter run", /\b(prettier|gofmt|rustfmt|clang-format)\b|\bcargo\s+fmt\b|\b(npm|pnpm|yarn|bun)\s+(run\s+)?(format|fmt)\b|\bblack\s+\S/i],
+  // busywork: burns a turn and prints nothing worth reading
+  ["idle wait", /\bsleep\s+\d|\bwhile\s+true\b|\byes\s*[|>]/i],
+  ["placeholder command", /\becho\s+["']?(test|testing|foo|bar|baz|hello world)\b/i],
+];
+
+// Matched line by line against tool output, so one advertising line does not
+// cost the model the whole result.
+const NOISE = [
+  ["funding pitch", /packages are looking for funding|run `npm fund`|^\s*(sponsor|donate|support (us|this project)|backers?)\b|opencollective|patreon/i],
+  ["upgrade nag", /new (major |minor )?version of \S+ (is )?available|^npm notice|\bnew release available\b|to update, run:|consider upgrading/i],
+  ["telemetry notice", /anonymous (usage )?(data|telemetry)|\btelemetry\b.{0,40}\b(enabled|collect)/i],
+  ["subscription pitch", /^\s*(subscribe|follow us|join our|sign up)\b|\bnewsletter\b/i],
+];
+
+// The name of the first list entry `text` trips, or undefined.
+const firstMatch = (list, text) => list.find(([, re]) => re.test(text))?.[0];
+
+// The model-visible text of a tool result. codex sends exec output as a bare
+// JSON string and MCP results as {content:[{text}]}; anything else is only
+// worth scanning as its JSON.
+const outputText = (response) =>
+  typeof response === "string" ? response
+  : typeof response?.output === "string" ? response.output
+  : Array.isArray(response?.content) ? response.content.map((c) => c?.text ?? "").join("\n")
+  : JSON.stringify(response ?? "");
+
+// Drops every output line the NOISE list covers. Returns undefined when the
+// output is clean, so it takes the normal path untouched.
+function trimNoise(response) {
+  const text = outputText(response);
+  const name = firstMatch(NOISE, text);
+  if (!name) return undefined;
+  const lines = text.split("\n");
+  const kept = lines.filter((line) => !firstMatch(NOISE, line));
+  return { name, kept: kept.join("\n"), dropped: lines.length - kept.length };
+}
+
 const pending = new Map(); // id → {res, key} awaiting a decision
 let seq = 0, island, islandReady, rulesFile;
 let savedRules = {};       // key → "allow" | "deny", persisted
@@ -191,6 +243,14 @@ function handleToolcall(req, res) {
     try { call = JSON.parse(Buffer.concat(chunks).toString()); }
     catch { res.statusCode = 400; return res.end('{"error":"invalid JSON"}'); }
     const text = `${call.tool ?? ""} ${typeof call.args === "string" ? call.args : JSON.stringify(call.args ?? "")}`;
+    // the skip list first: a call that is only a waste of a turn is refused
+    // here, before the rules and the indexes, and never reaches the island
+    const garbage = firstMatch(GARBAGE, text);
+    if (garbage) {
+      events.push({ kind: "toolcall", tool: call.tool, hits: [`garbage:${garbage}`], receivedAt: new Date().toISOString() });
+      appendFileSync(eventsFile, JSON.stringify(events[events.length - 1]) + "\n");
+      return res.end(JSON.stringify({ allow: false, verdict: "garbage", reason: `skipped: ${garbage}` }));
+    }
     const hits = scan(text);
     // keyword rules catch known-bad shapes; the rubbish index catches whatever
     // the user personally declared junk. Stable label so saved decisions stick.
@@ -287,9 +347,49 @@ function handleReviewPost(req, res) {
 
     const text = JSON.stringify(body.action ?? "");
     const tool = body.action?.tool_name ?? body.action?.tool ?? body.action?.type ?? "codex";
+    const kind = body.action?.action;
+    // the firehose entry, the per-thread copy and "answer it now" — hoisted so
+    // the skip list can record its own decisions before the rules ever run
+    const logEvent = (hits) => {
+      events.push({ kind: "review", tool, hits, receivedAt: new Date().toISOString() });
+      appendFileSync(eventsFile, JSON.stringify(events[events.length - 1]) + "\n");
+    };
+    // reviews land in the same per-thread file, verdict stamped when decided
+    const logReview = (verdict, decidedBy, hits) => sessions.append(threadOf(body), {
+      kind: "review", review_id: id, ...body, hits, verdict, decidedBy,
+      receivedAt: new Date().toISOString(),
+    });
+    const decide = (verdict, decidedBy, hits) => {
+      logEvent(hits);
+      reviews.set(id, { status: "decided", verdict });
+      logReview(verdict, decidedBy, hits);
+      return respondReview(res, id);
+    };
+
+    // The skip list, ahead of everything else. A call it covers is refused on
+    // the spot with the reason it was refused for; noisy output comes back with
+    // the noise taken out. Neither asks a person, and neither is remembered as
+    // a rule — the list is the rule.
+    if (kind === "tool_call" || kind === "approval") {
+      const garbage = firstMatch(GARBAGE, text);
+      if (garbage) {
+        return decide({ decision: "deny", reason: `skipped: ${garbage} — it burns a turn and proves nothing` },
+                      "garbage", [`garbage:${garbage}`]);
+      }
+    }
+    if (kind === "tool_output") {
+      const noise = trimNoise(body.action?.tool_response);
+      if (noise) {
+        return decide(noise.kept.trim()
+          ? { decision: "rewrite", payload: noise.kept, note: `dropped ${noise.dropped} line(s) of ${noise.name}` }
+          : { decision: "deny", reason: `skipped: the output was nothing but ${noise.name}` },
+          "noise", [`noise:${noise.name}`]);
+      }
+    }
+
     // keyword rules describe actions; a tool *output* is not one, so it only
     // faces the vector checks — this alone drops one popup per flagged call
-    const hits = body.action?.action === "tool_output" ? [] : scan(text);
+    const hits = kind === "tool_output" ? [] : scan(text);
     // the rubbish index is taste, not danger: match it strictly (0.90) so it
     // challenges near-duplicates, not everything in the same neighbourhood
     const junk = rubbish.match(text, 0.90);
@@ -297,17 +397,11 @@ function handleReviewPost(req, res) {
     const past = blockedIndex.match(text);
     if (past) hits.push("similar-to-blocked");
     if (hits.length === 0 && settings.askAll) hits.push(ASK_ALL);
-    events.push({ kind: "review", tool, hits, receivedAt: new Date().toISOString() });
-    appendFileSync(eventsFile, JSON.stringify(events[events.length - 1]) + "\n");
-    // reviews land in the same per-thread file, verdict stamped when decided
-    const logReview = (verdict, decidedBy) => sessions.append(threadOf(body), {
-      kind: "review", review_id: id, ...body, hits, verdict, decidedBy,
-      receivedAt: new Date().toISOString(),
-    });
+    logEvent(hits);
 
     if (hits.length === 0) {
       reviews.set(id, { status: "decided", verdict: verdictFor(true) });
-      logReview(verdictFor(true), "clean");
+      logReview(verdictFor(true), "clean", hits);
       return respondReview(res, id);
     }
     const ruleKey = `${tool}|${hits.join(",")}`;
@@ -315,7 +409,7 @@ function handleReviewPost(req, res) {
     if (saved) {
       if (saved === "deny") blockedIndex.add(text);
       reviews.set(id, { status: "decided", verdict: verdictFor(saved === "allow") });
-      logReview(verdictFor(saved === "allow"), `rule-${saved}`);
+      logReview(verdictFor(saved === "allow"), `rule-${saved}`, hits);
       return respondReview(res, id);
     }
     // a human already answered for these hits in this turn — honour it
@@ -328,7 +422,7 @@ function handleReviewPost(req, res) {
     if (!hits.includes(ASK_ALL) && body.context?.turn_id && turnGrants.has(turnKey)) {
       const allow = turnGrants.get(turnKey);
       reviews.set(id, { status: "decided", verdict: verdictFor(allow) });
-      logReview(verdictFor(allow), "turn-grant");
+      logReview(verdictFor(allow), "turn-grant", hits);
       return respondReview(res, id);
     }
     reviews.set(id, { status: "pending" });
@@ -343,7 +437,7 @@ function handleReviewPost(req, res) {
           const allow = JSON.parse(out).allow;
           reviews.set(id, { status: "decided", verdict: verdictFor(allow) });
           if (body.context?.turn_id && !hits.includes(ASK_ALL)) turnGrants.set(turnKey, allow);
-          logReview(verdictFor(allow), "island");
+          logReview(verdictFor(allow), "island", hits);
         } },
       ruleKey);
     respondReview(res, id); // 202 — ApiGuardian polls the Location
