@@ -58,6 +58,27 @@ explicit "Always allow/deny" still sticks, because that one was chosen. And
 with `askAll` on, tool *outputs* are challenged too, which is roughly a popup
 per step.
 
+## Skipped without asking
+
+Two lists in `desktop/main.js` decide on their own, ahead of the rules, the
+indexes and `askAll`. Neither reaches the island: there is nothing for a person
+to decide.
+
+`GARBAGE` matches tool calls that are a waste of a turn rather than a danger —
+lint runs (`npm run lint`, `cargo clippy`, `eslint`), formatter runs (`cargo
+fmt`, `prettier`), `sleep 5`, `echo test`. A match is denied with the reason it
+was denied for, so codex prints why it was skipped instead of silently losing
+the call.
+
+`NOISE` matches tool *output*, line by line: funding pitches, upgrade nags,
+telemetry notices, newsletter plugs. Matching lines are dropped and the rest of
+the output is handed back as a `rewrite`, so one advertising line does not cost
+the model the whole result. If nothing survives, the output is denied outright.
+
+Both are plain arrays of `[name, regex]` next to `RULES` — edit them there.
+Remove an entry if you actually want that call: with `lint run` on the list, a
+lint the agent was asked to run is skipped too.
+
 ## Build the fork
 
 ```sh
@@ -91,7 +112,7 @@ local.
 
 | codex sends | desktop does |
 |---|---|
-| `POST /v1/reviews` (prompt / instructions / tool_call / tool_output / approval / mcp_admission / compaction) | keyword rules → rubbish index → blocked index; clean → allow; hit → `202` + island, human decides, poller picks the verdict up |
+| `POST /v1/reviews` (prompt / instructions / tool_call / tool_output / approval / mcp_admission / compaction) | skip list → keyword rules → rubbish index → blocked index; skipped → denied or trimmed on the spot; clean → allow; hit → `202` + island, human decides, poller picks the verdict up |
 | `POST /v1/activities` (lifecycle, completions, token usage, context window) | appended to `userData/sessions/<thread_id>.jsonl` and the `events.jsonl` firehose |
 
 A verdict is not only allow-or-deny. On any of those gates the app can answer
